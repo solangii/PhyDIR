@@ -2,8 +2,6 @@ DS_STORE
 idea/
 __pycache__
 
-unsup3d/data/img_celeba/
-unsup3d/pretrained/*/
-unsup3d/results
+unsup3d/
 
 *.zip
