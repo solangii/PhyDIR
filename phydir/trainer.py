@@ -3,6 +3,7 @@ import glob
 from datetime import datetime
 import numpy as np
 import torch
+from . import meters
 from . import utils
 
 class Trainer():
@@ -21,6 +22,8 @@ class Trainer():
         self.test_result_dir = cfgs.get('test_result_dir', None)
         self.cfgs = cfgs
 
+        self.metrics_trace = meters.MetricsTrace()
+        self.make_metrics = lambda m=None: meters.StandardMetrics(m)
         self.model = model(cfgs)
         self.model.trainer = self
         self.train_loader, self.val_loader, self.test_loader = None, None, None #todo
