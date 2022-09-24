@@ -67,7 +67,19 @@ class Trainer():
         torch.save(self.model.get_model_state(), path)
 
     def test(self):
-        pass
+        """Perform testing."""
+        self.model.to_device(self.device)
+        self.current_epoch = self.load_checkpoint(optim=False)
+        if self.test_result_dir is None:
+            self.test_result_dir = os.path.join(self.checkpoint_dir,
+                                                f'test_results_{self.checkpoint_name}'.replace('.pth', ''))
+        print(f"Saving testing results to {self.test_result_dir}")
+
+        with torch.no_grad():
+            m = self.run_epoch(self.test_loader, epoch=self.current_epoch, is_test=True)
+
+        score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
+        self.model.save_scores(score_path)
 
     def train(self):
         """Perform training."""
@@ -115,4 +127,29 @@ class Trainer():
         print(f"Training completed after {epoch+1} epochs.")
 
     def run_epoch(self, loader, epoch=0, is_validation=False, is_test=False):
-        pass
+        is_train = not is_validation and not is_test
+        metrics = self.make_metrics()
+
+        if is_train:
+            print(f"Starting training epoch {epoch}")
+            self.model.set_train()
+        else:
+            print(f"Starting validation epoch {epoch}")
+            self.model.set_eval()
+
+        for iter, input in enumerate(loader):
+            m = self.model.forward(input)
+            if is_train:
+                self.model.backward()
+            elif is_test:
+                self.model.save_results(self.test_result_dir)
+
+            metrics.update(m, self.batch_size)
+            print(f"{'T' if is_train else 'V'}{epoch:02}/{iter:05}/{metrics}")
+
+            if self.use_logger and is_train:
+                total_iter = iter + epoch * self.train_iter_per_epoch
+                if total_iter % self.log_freq == 0:
+                    self.model.forward(self.viz_input)
+                    self.model.visualize(self.logger, total_iter=total_iter, max_bs=25)
+        return metrics
