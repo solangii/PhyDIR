@@ -135,27 +135,43 @@ class ConfNet(nn.Module):
         out = self.network(input)
         return self.out_net1(out), self.out_net2(out)
 
+# a conv layer
+class ConvLayer(nn.Module):
+    def __init__(self, cin, cout):
+        super(ConvLayer, self).__init__()
+        network = [
+            nn.Conv2d(cin, 64, kernel_size=4, stride=2, padding=1, bias=False),
+        ]
+        self.network = nn.Sequential(*network)
+
+    def forward(self, input):
+        # input : N*32*256*256 -> 1*32*256*256
+        return self.network(input)
+
 
 if __name__ == '__main__':
     from torchsummary import summary
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    input = torch.randn(1, 3, 256, 256).to(device)
+    input = torch.randn(6, 32, 256, 256).to(device)
+
+    network = ConvLayer(32, 64).to(device)
+    summary(network, (32, 256, 256))
 
     # depth network
-    netD = EDDeconv(cin=3, cout=1, nf=256, zdim=512, activation=None).to(device) # original params: nf->64, zdim->256
-    summary(netD, (3, 256, 256))
-    output = netD(input)
-    print(output.shape)
+    # netD = EDDeconv(cin=3, cout=1, nf=256, zdim=512, activation=None).to(device) # original params: nf->64, zdim->256
+    # summary(netD, (3, 256, 256))
+    # output = netD(input)
+    # print(output.shape)
 
     # view network
-    netV = Encoder(cin=3, cout=6, nf=32).to(device)
-    summary(netV, (3, 256, 256))
-    output = netV(input)
-    print(output.shape)
+    # netV = Encoder(cin=3, cout=6, nf=32).to(device)
+    # summary(netV, (3, 256, 256))
+    # output = netV(input)
+    # print(output.shape)
 
     # light network
-    netL = Encoder(cin=3, cout=4, nf=32).to(device)
-    summary(netL, (3, 256, 256))
-    output = netL(input)
-    print(output.shape)
+    # netL = Encoder(cin=3, cout=4, nf=32).to(device)
+    # summary(netL, (3, 256, 256))
+    # output = netL(input)
+    # print(output.shape)
