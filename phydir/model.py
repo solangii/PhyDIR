@@ -4,9 +4,8 @@ import glob
 import torch
 import torch.nn as nn
 import torchvision
-from phydir.models import networks
-from phydir.models import unet_model
-from phydir.models import utils
+from models import EDDeconv, Encoder, UNet
+from . import utils
 # from .renderer import Renderer
 
 
@@ -28,11 +27,11 @@ class PhyDIR():
         # self.renderer = Renderer(cfgs)
 
         ## networks and optimizers
-        self.netD = networks.EDDeconv(cin=3, cout=1, nf=256, zdim=512, activation=None)
-        self.netL = networks.Encoder(cin=3, cout=4, nf=32)
-        self.netV = networks.Encoder(cin=3, cout=6, nf=32)
-        self.netT = unet_model.UNet(n_channels=3, n_classes=32)
-        self.renderer = unet_model.UNet(n_channels=32, n_classes=3) # todo check shape
+        self.netD = EDDeconv(cin=3, cout=1, nf=256, zdim=512, activation=None)
+        self.netL = Encoder(cin=3, cout=4, nf=32)
+        self.netV = Encoder(cin=3, cout=6, nf=32)
+        self.netT = UNet(n_channels=3, n_classes=32)
+        self.renderer = UNet(n_channels=32, n_classes=3) # todo check shape
 
         self.network_names = [k for k in vars(self) if 'net' in k]
         self.make_optimizer = lambda model: torch.optim.Adam(
