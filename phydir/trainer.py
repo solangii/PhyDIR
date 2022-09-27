@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from . import meters
 from . import utils
+from .datasets.dataloaders import get_data_loaders
 
 class Trainer():
     def __init__(self, cfgs, model):
@@ -26,7 +27,8 @@ class Trainer():
         self.make_metrics = lambda m=None: meters.StandardMetrics(m)
         self.model = model(cfgs)
         self.model.trainer = self
-        self.train_loader, self.val_loader, self.test_loader = None, None, None #todo
+        self.train_loader, self.val_loader, self.test_loader = get_data_loaders(cfgs)
+
 
     def load_checkpoint(self, optim=True):
         """Search the specified/latest checkpoint in checkpoint_dir and load the model and optimizer."""
