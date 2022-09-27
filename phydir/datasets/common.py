@@ -12,16 +12,17 @@ def is_image_file(filename):
     return filename.lower().endswith(IMG_EXTENSIONS)
 
 
-## simple image dataset ##
 def make_dataset(dir):
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
     images = {}
     for root, _, fnames in sorted(os.walk(os.path.join(dir, 'datalist'))):
+        idx = 0
         for fname in fnames:
             dlist = json.load(open(os.path.join(root, fname)))
             if len(dlist) >= 6:
                 subject, _ = fname.split('.')
-                images[subject] = dlist
+                images[idx] = dlist
+                idx += 1
     return images
 
 
@@ -48,17 +49,18 @@ class ImageDataset(torch.utils.data.Dataset):
         return tfs.functional.to_tensor(img)
 
     def __getitem__(self, index):
+        # data : [(3, H, W), .... ]  K images, list of tensors
+        data = []
         K = np.random.randint(1, 7) # random 1~6
         random_ind = np.random.permutation(len(self.ids[index]))[:K]
-        imgs = []
-        for fpath in random_ind:
+        for i in random_ind:
+            fpath = self.ids[index][i]
             if is_image_file(fpath):
-                img = Image.open(fpath).convert('RGB')
+                img = Image.open(os.path.join(self.root, fpath)).convert('RGB')
                 hflip = not self.is_validation and np.random.rand() > 0.5
                 img = self.transform(img, hflip)
-                imgs.append(img)
-        imgs = torch.stack(imgs, dim=0) # [K, 3, 256, 256]
-        return imgs
+                data.append(img)
+        return data
 
     def __len__(self):
         return self.size

@@ -42,17 +42,14 @@ def get_data_loaders(cfgs):
 
 def get_image_loader(data_dir, is_validation=False, datasets='celeba',
     batch_size=8, num_workers=4, image_size=256, crop=None):
-    # data_list = []
+    data_list = []
 
-    # todo
     if 'celeba' in datasets:
-        pass
-    # if 'casia' in cfg.trainig_data:
-        # data_list.append()
-        # pass
-    # dataset = ConcatDataset(data_list)
-
-    dataset = ImageDataset(data_dir, image_size=image_size, crop=crop, is_validation=is_validation)
+        celeba_dataset = ImageDataset(data_dir, image_size=image_size, crop=crop, is_validation=is_validation)
+        data_list.append(celeba_dataset)
+    if 'casia' in datasets:
+        pass #todo
+    dataset = ConcatDataset(data_list)
     loader = torch.utils.data.DataLoader(
         dataset,
         batch_size=batch_size,
@@ -66,7 +63,7 @@ if __name__ == '__main__':
     import argparse
     from phydir import setup_runtime
     parser = argparse.ArgumentParser(description='Training configurations.')
-    parser.add_argument('--config', default='../configs/debug.yml', type=str, help='Specify a config file path')
+    parser.add_argument('--config', default='../../configs/debug.yml', type=str, help='Specify a config file path')
     parser.add_argument('--gpu', default=0, type=int, help='Specify a GPU device')
     parser.add_argument('--num_workers', default=4, type=int,
                         help='Specify the number of worker threads for data loaders')
@@ -75,21 +72,21 @@ if __name__ == '__main__':
     cfgs = setup_runtime(args)
 
     train_loader, val_loader, test_loader = get_data_loaders(cfgs)
-
+    print(train_loader)
     print("Training data:")
     for i, data in enumerate(train_loader):
-        print(data.size())
+        print(data)
         if i > 0:
             break
 
     print("Validation data:")
     for i, data in enumerate(val_loader):
-        print(data.size())
+        print(data)
         if i > 0:
             break
 
     print("Testing data:")
     for i, data in enumerate(test_loader):
-        print(data.size())
+        print(data)
         if i > 0:
             break
