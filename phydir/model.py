@@ -45,7 +45,6 @@ class PhyDIR():
         self.amb_light_rescaler = lambda x : (1+x)/2 *self.max_amb_light + (1-x)/2 *self.min_amb_light
         self.diff_light_rescaler = lambda x : (1+x)/2 *self.max_diff_light + (1-x)/2 *self.min_diff_light
 
-
     def init_optimizers(self):
         self.optimizer_names = []
         for net_name in self.network_names:
@@ -110,23 +109,40 @@ class PhyDIR():
         for optim_name in self.optimizer_names:
             getattr(self, optim_name).step()
 
-    def forward(self, input):
-        """Feedforward once."""
-        if self.load_gt_depth:
-            input, depth_gt = input
-        self.input_im = input.to(self.device) * 2. - 1.
-        b, c, h, w = self.input_im.shape
+    def forward(self, batch):
+        # [data, data, data, ...., data]
+        # data: K, 3, 256, 256 (K is random number with 1~6)
+        loss_total = 0
+        for input in batch:
+            self.input_im = input.to(self.device) *2.-1.
+            k, c, h, w = self.input_im.shape
 
-        ## predict implicit texture
-        self.texture = self.netT(self.input_im)
-        self.cannon_texture = None
+            # depth
+            # view
+            # light
+            # texture
 
-        ## predict canonical depth
-        self.canon_depth_raw = self.netD(self.input_im).squeeze(1)  # BxHxW
-        self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b,-1).mean(1).view(b,1,1)
-        self.canon_depth = self.canon_depth.tanh()
-        self.canon_depth = self.depth_rescaler(self.canon_depth)
+            # shading
+            # multi-image-shading
+            # rasterization
+            # grid-sampling
 
-        ## optional depth smoothness loss (only used in synthetic car experiments)
-        self.loss_depth_sm = ((self.canon_depth[:,:-1,:] - self.canon_depth[:,1:,:]) /(self.max_depth-self.min_depth)).abs().mean()
-        self.loss_depth_sm += ((self.canon_depth[:,:,:-1] - self.canon_depth[:,:,1:]) /(self.max_depth-self.min_depth)).abs().mean()
+            # rendering
+
+            # loss function
+            # self.loss_total = self.loss_depth + self.loss_view + self.loss_light + self.loss_texture + self.loss_rendering
+            self.loss_recon = None
+            self.loss_adv = None
+            self.loss_shape = None
+            self.loss_tex = None
+            self.loss_l1 = None
+            loss_total += self.loss_recon + self.loss_adv + self.loss_shape + self.loss_tex + self.loss_l1
+        self.loss_total = loss_total / len(batch)
+        metrics = {'loss': self.loss_total}
+        return metrics
+
+
+
+
+
+
