@@ -4,9 +4,9 @@ import glob
 import torch
 import torch.nn as nn
 import torchvision
-from . import networks
-from . import unet_model
-from . import utils
+from phydir.models import networks
+from phydir.models import unet_model
+from phydir.models import utils
 # from .renderer import Renderer
 
 
