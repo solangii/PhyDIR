@@ -1,7 +1,6 @@
-DS_STORE
-idea/
+.DS_STORE
+.idea/
 __pycache__
-
-unsup3d/
-
+phydir/.DS_STORE
+.unsup3d/
 *.zip
