@@ -4,7 +4,7 @@ import glob
 import torch
 import torch.nn as nn
 import torchvision
-from models import EDDeconv, Encoder, UNet
+from .models import EDDeconv, Encoder, UNet
 from . import utils
 # from .renderer import Renderer
 
