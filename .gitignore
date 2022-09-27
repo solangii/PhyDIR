@@ -2,5 +2,8 @@
 .idea/
 __pycache__
 phydir/.DS_STORE
-unsup3d/
+
+/unsup3d/
+/data/
+
 *.zip
