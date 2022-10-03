@@ -16,13 +16,15 @@ def make_dataset(dir):
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
     images = {}
     for root, _, fnames in sorted(os.walk(os.path.join(dir, 'datalist'))):
-        idx = 0
-        for fname in fnames:
-            dlist = json.load(open(os.path.join(root, fname)))
-            if len(dlist) >= 6:
-                subject, _ = fname.split('.')
-                images[idx] = dlist
-                idx += 1
+        jfile = os.path.join(root, 'combined.json')
+        if os.path.isfile(jfile):
+            with open(jfile, 'r') as f:
+                jdata = json.load(f)
+            idx = 0
+            for k, v in jdata.items():
+                if len(v) >= 6:
+                    images[idx] = v
+                    idx += 1
     return images
 
 
