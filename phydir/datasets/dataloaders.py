@@ -1,7 +1,8 @@
 import os
 import torch.utils.data
 from torch.utils.data import ConcatDataset
-from common import ImageDataset
+from .common import ImageDataset
+from .collate_fn import make_batch
 
 
 def get_data_loaders(cfgs):
@@ -51,7 +52,8 @@ def get_image_loader(data_dir, is_validation=False, datasets='celeba',
         batch_size=batch_size,
         shuffle=not is_validation,
         num_workers=num_workers,
-        pin_memory=True
+        pin_memory=True,
+        collate_fn=make_batch
     )
     return loader
 
