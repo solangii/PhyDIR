@@ -1,697 +1,972 @@
+"""
+---
+title: StyleGAN 2
+summary: >
+ An annotated PyTorch implementation of StyleGAN2.
+---
+
+# StyleGAN 2
+
+This is a [PyTorch](https://pytorch.org) implementation of the paper
+ [Analyzing and Improving the Image Quality of StyleGAN](https://papers.labml.ai/paper/1912.04958)
+ which introduces **StyleGAN 2**.
+StyleGAN 2 is an improvement over **StyleGAN** from the paper
+ [A Style-Based Generator Architecture for Generative Adversarial Networks](https://papers.labml.ai/paper/1812.04948).
+And StyleGAN is based on **Progressive GAN** from the paper
+ [Progressive Growing of GANs for Improved Quality, Stability, and Variation](https://papers.labml.ai/paper/1710.10196).
+All three papers are from the same authors from [NVIDIA AI](https://twitter.com/NVIDIAAI).
+
+*Our implementation is a minimalistic StyleGAN 2 model training code.
+Only single GPU training is supported to keep the implementation simple.
+We managed to shrink it to keep it at less than 500 lines of code, including the training loop.*
+
+**🏃 Here's the training code: [`experiment.py`](experiment.html).**
+
+![Generated Images](generated_64.png)
+
+---*These are $64 \times 64$ images generated after training for about 80K steps.*---
+
+
+We'll first introduce the three papers at a high level.
+
+## Generative Adversarial Networks
+
+Generative adversarial networks have two components; the generator and the discriminator.
+The generator network takes a random latent vector ($z \in \mathcal{Z}$)
+ and tries to generate a realistic image.
+The discriminator network tries to differentiate the real images from generated images.
+When we train the two networks together the generator starts generating images indistinguishable from real images.
+
+## Progressive GAN
+
+Progressive GAN generates high-resolution images ($1080 \times 1080$) of size.
+It does so by *progressively* increasing the image size.
+First, it trains a network that produces a $4 \times 4$ image, then $8 \times 8$ ,
+ then an $16 \times 16$  image, and so on up to the desired image resolution.
+
+At each resolution, the generator network produces an image in latent space which is converted into RGB,
+with a $1 \times 1$  convolution.
+When we progress from a lower resolution to a higher resolution
+ (say from $4 \times 4$  to $8 \times 8$ ) we scale the latent image by $2\times$
+ and add a new block (two $3 \times 3$  convolution layers)
+ and a new $1 \times 1$  layer to get RGB.
+The transition is done smoothly by adding a residual connection to
+ the $2\times$ scaled $4 \times 4$  RGB image.
+The weight of this residual connection is slowly reduced, to let the new block take over.
+
+The discriminator is a mirror image of the generator network.
+The progressive growth of the discriminator is done similarly.
+
+![progressive_gan.svg](progressive_gan.svg)
+
+---*$2\times$ and $0.5\times$ denote feature map resolution scaling and scaling.
+$4\times4$, $8\times4$, ... denote feature map resolution at the generator or discriminator block.
+Each discriminator and generator block consists of 2 convolution layers with leaky ReLU activations.*---
+
+They use **minibatch standard deviation** to increase variation and
+ **equalized learning rate** which we discussed below in the implementation.
+They also use **pixel-wise normalization** where at each pixel the feature vector is normalized.
+They apply this to all the convolution layer outputs (except RGB).
+
+
+## StyleGAN
+
+StyleGAN improves the generator of Progressive GAN keeping the discriminator architecture the same.
+
+#### Mapping Network
+
+It maps the random latent vector ($z \in \mathcal{Z}$)
+ into a different latent space ($w \in \mathcal{W}$),
+ with an 8-layer neural network.
+This gives an intermediate latent space $\mathcal{W}$
+where the factors of variations are more linear (disentangled).
+
+#### AdaIN
+
+Then $w$ is transformed into two vectors (**styles**) per layer,
+ $i$, $y_i = (y_{s,i}, y_{b,i}) = f_{A_i}(w)$ and used for scaling and shifting (biasing)
+ in each layer with $\text{AdaIN}$ operator (normalize and scale):
+$$\text{AdaIN}(x_i, y_i) = y_{s, i} \frac{x_i - \mu(x_i)}{\sigma(x_i)} + y_{b,i}$$
+
+#### Style Mixing
+
+To prevent the generator from assuming adjacent styles are correlated,
+ they randomly use different styles for different blocks.
+That is, they sample two latent vectors $(z_1, z_2)$ and corresponding $(w_1, w_2)$ and
+ use $w_1$ based styles for some blocks and $w_2$ based styles for some blacks randomly.
+
+#### Stochastic Variation
+
+Noise is made available to each block which helps the generator create more realistic images.
+Noise is scaled per channel by a learned weight.
+
+#### Bilinear Up and Down Sampling
+
+All the up and down-sampling operations are accompanied by bilinear smoothing.
+
+![style_gan.svg](style_gan.svg)
+
+---*$A$ denotes a linear layer.
+$B$ denotes a broadcast and scaling operation (noise is a single channel).
+StyleGAN also uses progressive growing like Progressive GAN.*---
+
+## StyleGAN 2
+
+StyleGAN 2 changes both the generator and the discriminator of StyleGAN.
+
+#### Weight Modulation and Demodulation
+
+They remove the $\text{AdaIN}$ operator and replace it with
+ the weight modulation and demodulation step.
+This is supposed to improve what they call droplet artifacts that are present in generated images,
+ which are caused by the normalization in $\text{AdaIN}$ operator.
+Style vector per layer is calculated from $w_i \in \mathcal{W}$ as $s_i = f_{A_i}(w_i)$.
+
+Then the convolution weights $w$ are modulated as follows.
+($w$ here on refers to weights not intermediate latent space,
+ we are sticking to the same notation as the paper.)
+
+$$w'_{i, j, k} = s_i \cdot w_{i, j, k}$$
+Then it's demodulated by normalizing,
+$$w''_{i,j,k} = \frac{w'_{i,j,k}}{\sqrt{\sum_{i,k}{w'_{i, j, k}}^2 + \epsilon}}$$
+where $i$ is the input channel, $j$ is the output channel, and $k$ is the kernel index.
+
+#### Path Length Regularization
+
+Path length regularization encourages a fixed-size step in $\mathcal{W}$ to result in a non-zero,
+ fixed-magnitude change in the generated image.
+
+#### No Progressive Growing
+
+StyleGAN2 uses residual connections (with down-sampling) in the discriminator and skip connections
+ in the generator with up-sampling
+  (the RGB outputs from each layer are added - no residual connections in feature maps).
+They show that with experiments that the contribution of low-resolution layers is higher
+ at beginning of the training and then high-resolution layers take over.
+"""
+
 import math
-import random
-import functools
-import operator
+from typing import Tuple, Optional, List
 
+import numpy as np
 import torch
+import torch.nn.functional as F
+import torch.utils.data
 from torch import nn
-from torch.nn import functional as F
-from torch.autograd import Function
-
-from op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d, conv2d_gradfix
 
 
-class PixelNorm(nn.Module):
-    def __init__(self):
+class MappingNetwork(nn.Module):
+    """
+    <a id="mapping_network"></a>
+
+    ## Mapping Network
+
+    ![Mapping Network](mapping_network.svg)
+
+    This is an MLP with 8 linear layers.
+    The mapping network maps the latent vector $z \in \mathcal{W}$
+    to an intermediate latent space $w \in \mathcal{W}$.
+    $\mathcal{W}$ space will be disentangled from the image space
+    where the factors of variation become more linear.
+    """
+
+    def __init__(self, features: int, n_layers: int):
+        """
+        * `features` is the number of features in $z$ and $w$
+        * `n_layers` is the number of layers in the mapping network.
+        """
         super().__init__()
 
-    def forward(self, input):
-        return input * torch.rsqrt(torch.mean(input ** 2, dim=1, keepdim=True) + 1e-8)
-
-
-def make_kernel(k):
-    k = torch.tensor(k, dtype=torch.float32)
-
-    if k.ndim == 1:
-        k = k[None, :] * k[:, None]
-
-    k /= k.sum()
-
-    return k
-
-
-class Upsample(nn.Module):
-    def __init__(self, kernel, factor=2):
-        super().__init__()
-
-        self.factor = factor
-        kernel = make_kernel(kernel) * (factor ** 2)
-        self.register_buffer("kernel", kernel)
-
-        p = kernel.shape[0] - factor
-
-        pad0 = (p + 1) // 2 + factor - 1
-        pad1 = p // 2
-
-        self.pad = (pad0, pad1)
-
-    def forward(self, input):
-        out = upfirdn2d(input, self.kernel, up=self.factor, down=1, pad=self.pad)
-
-        return out
-
-
-class Downsample(nn.Module):
-    def __init__(self, kernel, factor=2):
-        super().__init__()
-
-        self.factor = factor
-        kernel = make_kernel(kernel)
-        self.register_buffer("kernel", kernel)
-
-        p = kernel.shape[0] - factor
-
-        pad0 = (p + 1) // 2
-        pad1 = p // 2
-
-        self.pad = (pad0, pad1)
-
-    def forward(self, input):
-        out = upfirdn2d(input, self.kernel, up=1, down=self.factor, pad=self.pad)
-
-        return out
-
-
-class Blur(nn.Module):
-    def __init__(self, kernel, pad, upsample_factor=1):
-        super().__init__()
-
-        kernel = make_kernel(kernel)
-
-        if upsample_factor > 1:
-            kernel = kernel * (upsample_factor ** 2)
-
-        self.register_buffer("kernel", kernel)
-
-        self.pad = pad
-
-    def forward(self, input):
-        out = upfirdn2d(input, self.kernel, pad=self.pad)
-
-        return out
-
-
-class EqualConv2d(nn.Module):
-    def __init__(
-        self, in_channel, out_channel, kernel_size, stride=1, padding=0, bias=True
-    ):
-        super().__init__()
-
-        self.weight = nn.Parameter(
-            torch.randn(out_channel, in_channel, kernel_size, kernel_size)
-        )
-        self.scale = 1 / math.sqrt(in_channel * kernel_size ** 2)
-
-        self.stride = stride
-        self.padding = padding
-
-        if bias:
-            self.bias = nn.Parameter(torch.zeros(out_channel))
-
-        else:
-            self.bias = None
-
-    def forward(self, input):
-        out = conv2d_gradfix.conv2d(
-            input,
-            self.weight * self.scale,
-            bias=self.bias,
-            stride=self.stride,
-            padding=self.padding,
-        )
-
-        return out
-
-    def __repr__(self):
-        return (
-            f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]},"
-            f" {self.weight.shape[2]}, stride={self.stride}, padding={self.padding})"
-        )
-
-
-class EqualLinear(nn.Module):
-    def __init__(
-        self, in_dim, out_dim, bias=True, bias_init=0, lr_mul=1, activation=None
-    ):
-        super().__init__()
-
-        self.weight = nn.Parameter(torch.randn(out_dim, in_dim).div_(lr_mul))
-
-        if bias:
-            self.bias = nn.Parameter(torch.zeros(out_dim).fill_(bias_init))
-
-        else:
-            self.bias = None
-
-        self.activation = activation
-
-        self.scale = (1 / math.sqrt(in_dim)) * lr_mul
-        self.lr_mul = lr_mul
-
-    def forward(self, input):
-        if self.activation:
-            out = F.linear(input, self.weight * self.scale)
-            out = fused_leaky_relu(out, self.bias * self.lr_mul)
-
-        else:
-            out = F.linear(
-                input, self.weight * self.scale, bias=self.bias * self.lr_mul
-            )
-
-        return out
-
-    def __repr__(self):
-        return (
-            f"{self.__class__.__name__}({self.weight.shape[1]}, {self.weight.shape[0]})"
-        )
-
-
-class ModulatedConv2d(nn.Module):
-    def __init__(
-        self,
-        in_channel,
-        out_channel,
-        kernel_size,
-        style_dim,
-        demodulate=True,
-        upsample=False,
-        downsample=False,
-        blur_kernel=[1, 3, 3, 1],
-        fused=True,
-    ):
-        super().__init__()
-
-        self.eps = 1e-8
-        self.kernel_size = kernel_size
-        self.in_channel = in_channel
-        self.out_channel = out_channel
-        self.upsample = upsample
-        self.downsample = downsample
-
-        if upsample:
-            factor = 2
-            p = (len(blur_kernel) - factor) - (kernel_size - 1)
-            pad0 = (p + 1) // 2 + factor - 1
-            pad1 = p // 2 + 1
-
-            self.blur = Blur(blur_kernel, pad=(pad0, pad1), upsample_factor=factor)
-
-        if downsample:
-            factor = 2
-            p = (len(blur_kernel) - factor) + (kernel_size - 1)
-            pad0 = (p + 1) // 2
-            pad1 = p // 2
-
-            self.blur = Blur(blur_kernel, pad=(pad0, pad1))
-
-        fan_in = in_channel * kernel_size ** 2
-        self.scale = 1 / math.sqrt(fan_in)
-        self.padding = kernel_size // 2
-
-        self.weight = nn.Parameter(
-            torch.randn(1, out_channel, in_channel, kernel_size, kernel_size)
-        )
-
-        self.modulation = EqualLinear(style_dim, in_channel, bias_init=1)
-
-        self.demodulate = demodulate
-        self.fused = fused
-
-    def __repr__(self):
-        return (
-            f"{self.__class__.__name__}({self.in_channel}, {self.out_channel}, {self.kernel_size}, "
-            f"upsample={self.upsample}, downsample={self.downsample})"
-        )
-
-    def forward(self, input, style):
-        batch, in_channel, height, width = input.shape
-
-        if not self.fused:
-            weight = self.scale * self.weight.squeeze(0)
-            style = self.modulation(style)
-
-            if self.demodulate:
-                w = weight.unsqueeze(0) * style.view(batch, 1, in_channel, 1, 1)
-                dcoefs = (w.square().sum((2, 3, 4)) + 1e-8).rsqrt()
-
-            input = input * style.reshape(batch, in_channel, 1, 1)
-
-            if self.upsample:
-                weight = weight.transpose(0, 1)
-                out = conv2d_gradfix.conv_transpose2d(
-                    input, weight, padding=0, stride=2
-                )
-                out = self.blur(out)
-
-            elif self.downsample:
-                input = self.blur(input)
-                out = conv2d_gradfix.conv2d(input, weight, padding=0, stride=2)
-
-            else:
-                out = conv2d_gradfix.conv2d(input, weight, padding=self.padding)
-
-            if self.demodulate:
-                out = out * dcoefs.view(batch, -1, 1, 1)
-
-            return out
-
-        style = self.modulation(style).view(batch, 1, in_channel, 1, 1)
-        weight = self.scale * self.weight * style
-
-        if self.demodulate:
-            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
-            weight = weight * demod.view(batch, self.out_channel, 1, 1, 1)
-
-        weight = weight.view(
-            batch * self.out_channel, in_channel, self.kernel_size, self.kernel_size
-        )
-
-        if self.upsample:
-            input = input.view(1, batch * in_channel, height, width)
-            weight = weight.view(
-                batch, self.out_channel, in_channel, self.kernel_size, self.kernel_size
-            )
-            weight = weight.transpose(1, 2).reshape(
-                batch * in_channel, self.out_channel, self.kernel_size, self.kernel_size
-            )
-            out = conv2d_gradfix.conv_transpose2d(
-                input, weight, padding=0, stride=2, groups=batch
-            )
-            _, _, height, width = out.shape
-            out = out.view(batch, self.out_channel, height, width)
-            out = self.blur(out)
-
-        elif self.downsample:
-            input = self.blur(input)
-            _, _, height, width = input.shape
-            input = input.view(1, batch * in_channel, height, width)
-            out = conv2d_gradfix.conv2d(
-                input, weight, padding=0, stride=2, groups=batch
-            )
-            _, _, height, width = out.shape
-            out = out.view(batch, self.out_channel, height, width)
-
-        else:
-            input = input.view(1, batch * in_channel, height, width)
-            out = conv2d_gradfix.conv2d(
-                input, weight, padding=self.padding, groups=batch
-            )
-            _, _, height, width = out.shape
-            out = out.view(batch, self.out_channel, height, width)
-
-        return out
-
-
-class NoiseInjection(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-        self.weight = nn.Parameter(torch.zeros(1))
-
-    def forward(self, image, noise=None):
-        if noise is None:
-            batch, _, height, width = image.shape
-            noise = image.new_empty(batch, 1, height, width).normal_()
-
-        return image + self.weight * noise
-
-
-class ConstantInput(nn.Module):
-    def __init__(self, channel, size=4):
-        super().__init__()
-
-        self.input = nn.Parameter(torch.randn(1, channel, size, size))
-
-    def forward(self, input):
-        batch = input.shape[0]
-        out = self.input.repeat(batch, 1, 1, 1)
-
-        return out
-
-
-class StyledConv(nn.Module):
-    def __init__(
-        self,
-        in_channel,
-        out_channel,
-        kernel_size,
-        style_dim,
-        upsample=False,
-        blur_kernel=[1, 3, 3, 1],
-        demodulate=True,
-    ):
-        super().__init__()
-
-        self.conv = ModulatedConv2d(
-            in_channel,
-            out_channel,
-            kernel_size,
-            style_dim,
-            upsample=upsample,
-            blur_kernel=blur_kernel,
-            demodulate=demodulate,
-        )
-
-        self.noise = NoiseInjection()
-        # self.bias = nn.Parameter(torch.zeros(1, out_channel, 1, 1))
-        # self.activate = ScaledLeakyReLU(0.2)
-        self.activate = FusedLeakyReLU(out_channel)
-
-    def forward(self, input, style, noise=None):
-        out = self.conv(input, style)
-        out = self.noise(out, noise=noise)
-        # out = out + self.bias
-        out = self.activate(out)
-
-        return out
-
-
-class ToRGB(nn.Module):
-    def __init__(self, in_channel, style_dim, upsample=True, blur_kernel=[1, 3, 3, 1]):
-        super().__init__()
-
-        if upsample:
-            self.upsample = Upsample(blur_kernel)
-
-        self.conv = ModulatedConv2d(in_channel, 3, 1, style_dim, demodulate=False)
-        self.bias = nn.Parameter(torch.zeros(1, 3, 1, 1))
-
-    def forward(self, input, style, skip=None):
-        out = self.conv(input, style)
-        out = out + self.bias
-
-        if skip is not None:
-            skip = self.upsample(skip)
-
-            out = out + skip
-
-        return out
+        # Create the MLP
+        layers = []
+        for i in range(n_layers):
+            # [Equalized learning-rate linear layers](#equalized_linear)
+            layers.append(EqualizedLinear(features, features))
+            # Leaky Relu
+            layers.append(nn.LeakyReLU(negative_slope=0.2, inplace=True))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, z: torch.Tensor):
+        # Normalize $z$
+        z = F.normalize(z, dim=1)
+        # Map $z$ to $w$
+        return self.net(z)
 
 
 class Generator(nn.Module):
-    def __init__(
-        self,
-        size,
-        style_dim,
-        n_mlp,
-        channel_multiplier=2,
-        blur_kernel=[1, 3, 3, 1],
-        lr_mlp=0.01,
-    ):
+    """
+    <a id="generator"></a>
+
+    ## StyleGAN2 Generator
+
+    ![Generator](style_gan2.svg)
+
+    ---*$A$ denotes a linear layer.
+    $B$ denotes a broadcast and scaling operation (noise is a single channel).
+    [`toRGB`](#to_rgb) also has a style modulation which is not shown in the diagram to keep it simple.*---
+
+    The generator starts with a learned constant.
+    Then it has a series of blocks. The feature map resolution is doubled at each block
+    Each block outputs an RGB image and they are scaled up and summed to get the final RGB image.
+    """
+
+    def __init__(self, log_resolution: int, d_latent: int, n_features: int = 32, max_features: int = 512):
+        """
+        * `log_resolution` is the $\log_2$ of image resolution
+        * `d_latent` is the dimensionality of $w$
+        * `n_features` number of features in the convolution layer at the highest resolution (final block)
+        * `max_features` maximum number of features in any generator block
+        """
         super().__init__()
 
-        self.size = size
+        # Calculate the number of features for each block
+        #
+        # Something like `[512, 512, 256, 128, 64, 32]`
+        features = [min(max_features, n_features * (2 ** i)) for i in range(log_resolution - 2, -1, -1)]
+        # Number of generator blocks
+        self.n_blocks = len(features)
 
-        self.style_dim = style_dim
+        # Trainable $4 \times 4$ constant
+        self.initial_constant = nn.Parameter(torch.randn((1, features[0], 4, 4)))
 
-        layers = [PixelNorm()]
+        # First style block for $4 \times 4$ resolution and layer to get RGB
+        self.style_block = StyleBlock(d_latent, features[0], features[0])
+        self.to_rgb = ToRGB(d_latent, features[0])
 
-        for i in range(n_mlp):
-            layers.append(
-                EqualLinear(
-                    style_dim, style_dim, lr_mul=lr_mlp, activation="fused_lrelu"
-                )
-            )
+        # Generator blocks
+        blocks = [GeneratorBlock(d_latent, features[i - 1], features[i]) for i in range(1, self.n_blocks)]
+        self.blocks = nn.ModuleList(blocks)
 
-        self.style = nn.Sequential(*layers)
+        # $2 \times$ up sampling layer. The feature space is up sampled
+        # at each block
+        self.up_sample = UpSample()
 
-        self.channels = {
-            4: 512,
-            8: 512,
-            16: 512,
-            32: 512,
-            64: 256 * channel_multiplier,
-            128: 128 * channel_multiplier,
-            256: 64 * channel_multiplier,
-            512: 32 * channel_multiplier,
-            1024: 16 * channel_multiplier,
-        }
+    def forward(self, w: torch.Tensor, input_noise: List[Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]]):
+        """
+        * `w` is $w$. In order to mix-styles (use different $w$ for different layers), we provide a separate
+        $w$ for each [generator block](#generator_block). It has shape `[n_blocks, batch_size, d_latent]`.
+        * `input_noise` is the noise for each block.
+        It's a list of pairs of noise sensors because each block (except the initial) has two noise inputs
+        after each convolution layer (see the diagram).
+        """
 
-        self.input = ConstantInput(self.channels[4])
-        self.conv1 = StyledConv(
-            self.channels[4], self.channels[4], 3, style_dim, blur_kernel=blur_kernel
-        )
-        self.to_rgb1 = ToRGB(self.channels[4], style_dim, upsample=False)
+        # Get batch size
+        batch_size = w.shape[1]
 
-        self.log_size = int(math.log(size, 2))
-        self.num_layers = (self.log_size - 2) * 2 + 1
+        # Expand the learned constant to match batch size
+        x = self.initial_constant.expand(batch_size, -1, -1, -1)
 
-        self.convs = nn.ModuleList()
-        self.upsamples = nn.ModuleList()
-        self.to_rgbs = nn.ModuleList()
-        self.noises = nn.Module()
+        # The first style block
+        x = self.style_block(x, w[0], input_noise[0][1])
+        # Get first rgb image
+        rgb = self.to_rgb(x, w[0])
 
-        in_channel = self.channels[4]
+        # Evaluate rest of the blocks
+        for i in range(1, self.n_blocks):
+            # Up sample the feature map
+            x = self.up_sample(x)
+            # Run it through the [generator block](#generator_block)
+            x, rgb_new = self.blocks[i - 1](x, w[i], input_noise[i])
+            # Up sample the RGB image and add to the rgb from the block
+            rgb = self.up_sample(rgb) + rgb_new
 
-        for layer_idx in range(self.num_layers):
-            res = (layer_idx + 5) // 2
-            shape = [1, 1, 2 ** res, 2 ** res]
-            self.noises.register_buffer(f"noise_{layer_idx}", torch.randn(*shape))
-
-        for i in range(3, self.log_size + 1):
-            out_channel = self.channels[2 ** i]
-
-            self.convs.append(
-                StyledConv(
-                    in_channel,
-                    out_channel,
-                    3,
-                    style_dim,
-                    upsample=True,
-                    blur_kernel=blur_kernel,
-                )
-            )
-
-            self.convs.append(
-                StyledConv(
-                    out_channel, out_channel, 3, style_dim, blur_kernel=blur_kernel
-                )
-            )
-
-            self.to_rgbs.append(ToRGB(out_channel, style_dim))
-
-            in_channel = out_channel
-
-        self.n_latent = self.log_size * 2 - 2
-
-    def make_noise(self):
-        device = self.input.input.device
-
-        noises = [torch.randn(1, 1, 2 ** 2, 2 ** 2, device=device)]
-
-        for i in range(3, self.log_size + 1):
-            for _ in range(2):
-                noises.append(torch.randn(1, 1, 2 ** i, 2 ** i, device=device))
-
-        return noises
-
-    def mean_latent(self, n_latent):
-        latent_in = torch.randn(
-            n_latent, self.style_dim, device=self.input.input.device
-        )
-        latent = self.style(latent_in).mean(0, keepdim=True)
-
-        return latent
-
-    def get_latent(self, input):
-        return self.style(input)
-
-    def forward(
-        self,
-        styles,
-        return_latents=False,
-        inject_index=None,
-        truncation=1,
-        truncation_latent=None,
-        input_is_latent=False,
-        noise=None,
-        randomize_noise=True,
-    ):
-        if not input_is_latent:
-            styles = [self.style(s) for s in styles]
-
-        if noise is None:
-            if randomize_noise:
-                noise = [None] * self.num_layers
-            else:
-                noise = [
-                    getattr(self.noises, f"noise_{i}") for i in range(self.num_layers)
-                ]
-
-        if truncation < 1:
-            style_t = []
-
-            for style in styles:
-                style_t.append(
-                    truncation_latent + truncation * (style - truncation_latent)
-                )
-
-            styles = style_t
-
-        if len(styles) < 2:
-            inject_index = self.n_latent
-
-            if styles[0].ndim < 3:
-                latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
-
-            else:
-                latent = styles[0]
-
-        else:
-            if inject_index is None:
-                inject_index = random.randint(1, self.n_latent - 1)
-
-            latent = styles[0].unsqueeze(1).repeat(1, inject_index, 1)
-            latent2 = styles[1].unsqueeze(1).repeat(1, self.n_latent - inject_index, 1)
-
-            latent = torch.cat([latent, latent2], 1)
-
-        out = self.input(latent)
-        out = self.conv1(out, latent[:, 0], noise=noise[0])
-
-        skip = self.to_rgb1(out, latent[:, 1])
-
-        i = 1
-        for conv1, conv2, noise1, noise2, to_rgb in zip(
-            self.convs[::2], self.convs[1::2], noise[1::2], noise[2::2], self.to_rgbs
-        ):
-            out = conv1(out, latent[:, i], noise=noise1)
-            out = conv2(out, latent[:, i + 1], noise=noise2)
-            skip = to_rgb(out, latent[:, i + 2], skip)
-
-            i += 2
-
-        image = skip
-
-        if return_latents:
-            return image, latent
-
-        else:
-            return image, None
+        # Return the final RGB image
+        return rgb
 
 
-class ConvLayer(nn.Sequential):
-    def __init__(
-        self,
-        in_channel,
-        out_channel,
-        kernel_size,
-        downsample=False,
-        blur_kernel=[1, 3, 3, 1],
-        bias=True,
-        activate=True,
-    ):
-        layers = []
+class GeneratorBlock(nn.Module):
+    """
+    <a id="generator_block"></a>
 
-        if downsample:
-            factor = 2
-            p = (len(blur_kernel) - factor) + (kernel_size - 1)
-            pad0 = (p + 1) // 2
-            pad1 = p // 2
+    ### Generator Block
 
-            layers.append(Blur(blur_kernel, pad=(pad0, pad1)))
+    ![Generator block](generator_block.svg)
 
-            stride = 2
-            self.padding = 0
+    ---*$A$ denotes a linear layer.
+    $B$ denotes a broadcast and scaling operation (noise is a single channel).
+    [`toRGB`](#to_rgb) also has a style modulation which is not shown in the diagram to keep it simple.*---
 
-        else:
-            stride = 1
-            self.padding = kernel_size // 2
+    The generator block consists of two [style blocks](#style_block) ($3 \times 3$ convolutions with style modulation)
+    and an RGB output.
+    """
 
-        layers.append(
-            EqualConv2d(
-                in_channel,
-                out_channel,
-                kernel_size,
-                padding=self.padding,
-                stride=stride,
-                bias=bias and not activate,
-            )
-        )
-
-        if activate:
-            layers.append(FusedLeakyReLU(out_channel, bias=bias))
-
-        super().__init__(*layers)
-
-
-class ResBlock(nn.Module):
-    def __init__(self, in_channel, out_channel, blur_kernel=[1, 3, 3, 1]):
+    def __init__(self, d_latent: int, in_features: int, out_features: int):
+        """
+        * `d_latent` is the dimensionality of $w$
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        """
         super().__init__()
 
-        self.conv1 = ConvLayer(in_channel, in_channel, 3)
-        self.conv2 = ConvLayer(in_channel, out_channel, 3, downsample=True)
+        # First [style block](#style_block) changes the feature map size to `out_features`
+        self.style_block1 = StyleBlock(d_latent, in_features, out_features)
+        # Second [style block](#style_block)
+        self.style_block2 = StyleBlock(d_latent, out_features, out_features)
 
-        self.skip = ConvLayer(
-            in_channel, out_channel, 1, downsample=True, activate=False, bias=False
-        )
+        # *toRGB* layer
+        self.to_rgb = ToRGB(d_latent, out_features)
 
-    def forward(self, input):
-        out = self.conv1(input)
-        out = self.conv2(out)
+    def forward(self, x: torch.Tensor, w: torch.Tensor, noise: Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]):
+        """
+        * `x` is the input feature map of shape `[batch_size, in_features, height, width]`
+        * `w` is $w$ with shape `[batch_size, d_latent]`
+        * `noise` is a tuple of two noise tensors of shape `[batch_size, 1, height, width]`
+        """
+        # First style block with first noise tensor.
+        # The output is of shape `[batch_size, out_features, height, width]`
+        x = self.style_block1(x, w, noise[0])
+        # Second style block with second noise tensor.
+        # The output is of shape `[batch_size, out_features, height, width]`
+        x = self.style_block2(x, w, noise[1])
 
-        skip = self.skip(input)
-        out = (out + skip) / math.sqrt(2)
+        # Get RGB image
+        rgb = self.to_rgb(x, w)
 
-        return out
+        # Return feature map and rgb image
+        return x, rgb
+
+
+class StyleBlock(nn.Module):
+    """
+    <a id="style_block"></a>
+
+    ### Style Block
+
+    ![Style block](style_block.svg)
+
+    ---*$A$ denotes a linear layer.
+    $B$ denotes a broadcast and scaling operation (noise is single channel).*---
+
+    Style block has a weight modulation convolution layer.
+    """
+
+    def __init__(self, d_latent: int, in_features: int, out_features: int):
+        """
+        * `d_latent` is the dimensionality of $w$
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        """
+        super().__init__()
+        # Get style vector from $w$ (denoted by $A$ in the diagram) with
+        # an [equalized learning-rate linear layer](#equalized_linear)
+        self.to_style = EqualizedLinear(d_latent, in_features, bias=1.0)
+        # Weight modulated convolution layer
+        self.conv = Conv2dWeightModulate(in_features, out_features, kernel_size=3)
+        # Noise scale
+        self.scale_noise = nn.Parameter(torch.zeros(1))
+        # Bias
+        self.bias = nn.Parameter(torch.zeros(out_features))
+
+        # Activation function
+        self.activation = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x: torch.Tensor, w: torch.Tensor, noise: Optional[torch.Tensor]):
+        """
+        * `x` is the input feature map of shape `[batch_size, in_features, height, width]`
+        * `w` is $w$ with shape `[batch_size, d_latent]`
+        * `noise` is a tensor of shape `[batch_size, 1, height, width]`
+        """
+        # Get style vector $s$
+        s = self.to_style(w)
+        # Weight modulated convolution
+        x = self.conv(x, s)
+        # Scale and add noise
+        if noise is not None:
+            x = x + self.scale_noise[None, :, None, None] * noise
+        # Add bias and evaluate activation function
+        return self.activation(x + self.bias[None, :, None, None])
+
+
+class ToRGB(nn.Module):
+    """
+    <a id="to_rgb"></a>
+
+    ### To RGB
+
+    ![To RGB](to_rgb.svg)
+
+    ---*$A$ denotes a linear layer.*---
+
+    Generates an RGB image from a feature map using $1 \times 1$ convolution.
+    """
+
+    def __init__(self, d_latent: int, features: int):
+        """
+        * `d_latent` is the dimensionality of $w$
+        * `features` is the number of features in the feature map
+        """
+        super().__init__()
+        # Get style vector from $w$ (denoted by $A$ in the diagram) with
+        # an [equalized learning-rate linear layer](#equalized_linear)
+        self.to_style = EqualizedLinear(d_latent, features, bias=1.0)
+
+        # Weight modulated convolution layer without demodulation
+        self.conv = Conv2dWeightModulate(features, 3, kernel_size=1, demodulate=False)
+        # Bias
+        self.bias = nn.Parameter(torch.zeros(3))
+        # Activation function
+        self.activation = nn.LeakyReLU(0.2, True)
+
+    def forward(self, x: torch.Tensor, w: torch.Tensor):
+        """
+        * `x` is the input feature map of shape `[batch_size, in_features, height, width]`
+        * `w` is $w$ with shape `[batch_size, d_latent]`
+        """
+        # Get style vector $s$
+        style = self.to_style(w)
+        # Weight modulated convolution
+        x = self.conv(x, style)
+        # Add bias and evaluate activation function
+        return self.activation(x + self.bias[None, :, None, None])
+
+
+class Conv2dWeightModulate(nn.Module):
+    """
+    ### Convolution with Weight Modulation and Demodulation
+
+    This layer scales the convolution weights by the style vector and demodulates by normalizing it.
+    """
+
+    def __init__(self, in_features: int, out_features: int, kernel_size: int,
+                 demodulate: float = True, eps: float = 1e-8):
+        """
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        * `kernel_size` is the size of the convolution kernel
+        * `demodulate` is flag whether to normalize weights by its standard deviation
+        * `eps` is the $\epsilon$ for normalizing
+        """
+        super().__init__()
+        # Number of output features
+        self.out_features = out_features
+        # Whether to normalize weights
+        self.demodulate = demodulate
+        # Padding size
+        self.padding = (kernel_size - 1) // 2
+
+        # [Weights parameter with equalized learning rate](#equalized_weight)
+        self.weight = EqualizedWeight([out_features, in_features, kernel_size, kernel_size])
+        # $\epsilon$
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor, s: torch.Tensor):
+        """
+        * `x` is the input feature map of shape `[batch_size, in_features, height, width]`
+        * `s` is style based scaling tensor of shape `[batch_size, in_features]`
+        """
+
+        # Get batch size, height and width
+        b, _, h, w = x.shape
+
+        # Reshape the scales
+        s = s[:, None, :, None, None]
+        # Get [learning rate equalized weights](#equalized_weight)
+        weights = self.weight()[None, :, :, :, :]
+        # $$w`_{i,j,k} = s_i * w_{i,j,k}$$
+        # where $i$ is the input channel, $j$ is the output channel, and $k$ is the kernel index.
+        #
+        # The result has shape `[batch_size, out_features, in_features, kernel_size, kernel_size]`
+        weights = weights * s
+
+        # Demodulate
+        if self.demodulate:
+            # $$\sigma_j = \sqrt{\sum_{i,k} (w'_{i, j, k})^2 + \epsilon}$$
+            sigma_inv = torch.rsqrt((weights ** 2).sum(dim=(2, 3, 4), keepdim=True) + self.eps)
+            # $$w''_{i,j,k} = \frac{w'_{i,j,k}}{\sqrt{\sum_{i,k} (w'_{i, j, k})^2 + \epsilon}}$$
+            weights = weights * sigma_inv
+
+        # Reshape `x`
+        x = x.reshape(1, -1, h, w)
+
+        # Reshape weights
+        _, _, *ws = weights.shape
+        weights = weights.reshape(b * self.out_features, *ws)
+
+        # Use grouped convolution to efficiently calculate the convolution with sample wise kernel.
+        # i.e. we have a different kernel (weights) for each sample in the batch
+        x = F.conv2d(x, weights, padding=self.padding, groups=b)
+
+        # Reshape `x` to `[batch_size, out_features, height, width]` and return
+        return x.reshape(-1, self.out_features, h, w)
 
 
 class Discriminator(nn.Module):
-    def __init__(self, size, channel_multiplier=2, blur_kernel=[1, 3, 3, 1]):
+    """
+    <a id="discriminator"></a>
+
+    ## StyleGAN 2 Discriminator
+
+    ![Discriminator](style_gan2_disc.svg)
+
+    Discriminator first transforms the image to a feature map of the same resolution and then
+    runs it through a series of blocks with residual connections.
+    The resolution is down-sampled by $2 \times$ at each block while doubling the
+    number of features.
+    """
+
+    def __init__(self, log_resolution: int, n_features: int = 64, max_features: int = 512):
+        """
+        * `log_resolution` is the $\log_2$ of image resolution
+        * `n_features` number of features in the convolution layer at the highest resolution (first block)
+        * `max_features` maximum number of features in any generator block
+        """
         super().__init__()
 
-        channels = {
-            4: 512,
-            8: 512,
-            16: 512,
-            32: 512,
-            64: 256 * channel_multiplier,
-            128: 128 * channel_multiplier,
-            256: 64 * channel_multiplier,
-            512: 32 * channel_multiplier,
-            1024: 16 * channel_multiplier,
-        }
-
-        convs = [ConvLayer(3, channels[size], 1)]
-
-        log_size = int(math.log(size, 2))
-
-        in_channel = channels[size]
-
-        for i in range(log_size, 2, -1):
-            out_channel = channels[2 ** (i - 1)]
-
-            convs.append(ResBlock(in_channel, out_channel, blur_kernel))
-
-            in_channel = out_channel
-
-        self.convs = nn.Sequential(*convs)
-
-        self.stddev_group = 4
-        self.stddev_feat = 1
-
-        self.final_conv = ConvLayer(in_channel + 1, channels[4], 3)
-        self.final_linear = nn.Sequential(
-            EqualLinear(channels[4] * 4 * 4, channels[4], activation="fused_lrelu"),
-            EqualLinear(channels[4], 1),
+        # Layer to convert RGB image to a feature map with `n_features` number of features.
+        self.from_rgb = nn.Sequential(
+            EqualizedConv2d(3, n_features, 1),
+            nn.LeakyReLU(0.2, True),
         )
 
-    def forward(self, input):
-        out = self.convs(input)
+        # Calculate the number of features for each block.
+        #
+        # Something like `[64, 128, 256, 512, 512, 512]`.
+        features = [min(max_features, n_features * (2 ** i)) for i in range(log_resolution - 1)]
+        # Number of [discirminator blocks](#discriminator_block)
+        n_blocks = len(features) - 1
+        # Discriminator blocks
+        blocks = [DiscriminatorBlock(features[i], features[i + 1]) for i in range(n_blocks)]
+        self.blocks = nn.Sequential(*blocks)
 
-        batch, channel, height, width = out.shape
-        group = min(batch, self.stddev_group)
-        stddev = out.view(
-            group, -1, self.stddev_feat, channel // self.stddev_feat, height, width
+        # [Mini-batch Standard Deviation](#mini_batch_std_dev)
+        self.std_dev = MiniBatchStdDev()
+        # Number of features after adding the standard deviations map
+        final_features = features[-1] + 1
+        # Final $3 \times 3$ convolution layer
+        self.conv = EqualizedConv2d(final_features, final_features, 3)
+        # Final linear layer to get the classification
+        self.final = EqualizedLinear(2 * 2 * final_features, 1)
+
+    def forward(self, x: torch.Tensor):
+        """
+        * `x` is the input image of shape `[batch_size, 3, height, width]`
+        """
+
+        # Try to normalize the image (this is totally optional, but sped up the early training a little)
+        x = x - 0.5
+        # Convert from RGB
+        x = self.from_rgb(x)
+        # Run through the [discriminator blocks](#discriminator_block)
+        x = self.blocks(x)
+
+        # Calculate and append [mini-batch standard deviation](#mini_batch_std_dev)
+        x = self.std_dev(x)
+        # $3 \times 3$ convolution
+        x = self.conv(x)
+        # Flatten
+        x = x.reshape(x.shape[0], -1)
+        # Return the classification score
+        return self.final(x)
+
+
+class DiscriminatorBlock(nn.Module):
+    """
+    <a id="discriminator_black"></a>
+
+    ### Discriminator Block
+
+    ![Discriminator block](discriminator_block.svg)
+
+    Discriminator block consists of two $3 \times 3$ convolutions with a residual connection.
+    """
+
+    def __init__(self, in_features, out_features):
+        """
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        """
+        super().__init__()
+        # Down-sampling and $1 \times 1$ convolution layer for the residual connection
+        self.residual = nn.Sequential(DownSample(),
+                                      EqualizedConv2d(in_features, out_features, kernel_size=1))
+
+        # Two $3 \times 3$ convolutions
+        self.block = nn.Sequential(
+            EqualizedConv2d(in_features, in_features, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, True),
+            EqualizedConv2d(in_features, out_features, kernel_size=3, padding=1),
+            nn.LeakyReLU(0.2, True),
         )
-        stddev = torch.sqrt(stddev.var(0, unbiased=False) + 1e-8)
-        stddev = stddev.mean([2, 3, 4], keepdims=True).squeeze(2)
-        stddev = stddev.repeat(group, 1, height, width)
-        out = torch.cat([out, stddev], 1)
 
-        out = self.final_conv(out)
+        # Down-sampling layer
+        self.down_sample = DownSample()
 
-        out = out.view(batch, -1)
-        out = self.final_linear(out)
+        # Scaling factor $\frac{1}{\sqrt 2}$ after adding the residual
+        self.scale = 1 / math.sqrt(2)
 
-        return out
+    def forward(self, x):
+        # Get the residual connection
+        residual = self.residual(x)
+
+        # Convolutions
+        x = self.block(x)
+        # Down-sample
+        x = self.down_sample(x)
+
+        # Add the residual and scale
+        return (x + residual) * self.scale
+
+
+class MiniBatchStdDev(nn.Module):
+    """
+    <a id="mini_batch_std_dev"></a>
+
+    ### Mini-batch Standard Deviation
+
+    Mini-batch standard deviation calculates the standard deviation
+    across a mini-batch (or a subgroups within the mini-batch)
+    for each feature in the feature map. Then it takes the mean of all
+    the standard deviations and appends it to the feature map as one extra feature.
+    """
+
+    def __init__(self, group_size: int = 4):
+        """
+        * `group_size` is the number of samples to calculate standard deviation across.
+        """
+        super().__init__()
+        self.group_size = group_size
+
+    def forward(self, x: torch.Tensor):
+        """
+        * `x` is the feature map
+        """
+        # Check if the batch size is divisible by the group size
+        assert x.shape[0] % self.group_size == 0
+        # Split the samples into groups of `group_size`, we flatten the feature map to a single dimension
+        # since we want to calculate the standard deviation for each feature.
+        grouped = x.view(self.group_size, -1)
+        # Calculate the standard deviation for each feature among `group_size` samples
+        #
+        # \begin{align}
+        # \mu_{i} &= \frac{1}{N} \sum_g x_{g,i} \\
+        # \sigma_{i} &= \sqrt{\frac{1}{N} \sum_g (x_{g,i} - \mu_i)^2  + \epsilon}
+        # \end{align}
+        std = torch.sqrt(grouped.var(dim=0) + 1e-8)
+        # Get the mean standard deviation
+        std = std.mean().view(1, 1, 1, 1)
+        # Expand the standard deviation to append to the feature map
+        b, _, h, w = x.shape
+        std = std.expand(b, -1, h, w)
+        # Append (concatenate) the standard deviations to the feature map
+        return torch.cat([x, std], dim=1)
+
+
+class DownSample(nn.Module):
+    """
+    <a id="down_sample"></a>
+
+    ### Down-sample
+
+    The down-sample operation [smoothens](#smooth) each feature channel and
+     scale $2 \times$ using bilinear interpolation.
+    This is based on the paper
+     [Making Convolutional Networks Shift-Invariant Again](https://papers.labml.ai/paper/1904.11486).
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Smoothing layer
+        self.smooth = Smooth()
+
+    def forward(self, x: torch.Tensor):
+        # Smoothing or blurring
+        x = self.smooth(x)
+        # Scaled down
+        return F.interpolate(x, (x.shape[2] // 2, x.shape[3] // 2), mode='bilinear', align_corners=False)
+
+
+class UpSample(nn.Module):
+    """
+    <a id="up_sample"></a>
+
+    ### Up-sample
+
+    The up-sample operation scales the image up by $2 \times$ and [smoothens](#smooth) each feature channel.
+    This is based on the paper
+     [Making Convolutional Networks Shift-Invariant Again](https://papers.labml.ai/paper/1904.11486).
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Up-sampling layer
+        self.up_sample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+        # Smoothing layer
+        self.smooth = Smooth()
+
+    def forward(self, x: torch.Tensor):
+        # Up-sample and smoothen
+        return self.smooth(self.up_sample(x))
+
+
+class Smooth(nn.Module):
+    """
+    <a id="smooth"></a>
+
+    ### Smoothing Layer
+
+    This layer blurs each channel
+    """
+
+    def __init__(self):
+        super().__init__()
+        # Blurring kernel
+        kernel = [[1, 2, 1],
+                  [2, 4, 2],
+                  [1, 2, 1]]
+        # Convert the kernel to a PyTorch tensor
+        kernel = torch.tensor([[kernel]], dtype=torch.float)
+        # Normalize the kernel
+        kernel /= kernel.sum()
+        # Save kernel as a fixed parameter (no gradient updates)
+        self.kernel = nn.Parameter(kernel, requires_grad=False)
+        # Padding layer
+        self.pad = nn.ReplicationPad2d(1)
+
+    def forward(self, x: torch.Tensor):
+        # Get shape of the input feature map
+        b, c, h, w = x.shape
+        # Reshape for smoothening
+        x = x.view(-1, 1, h, w)
+
+        # Add padding
+        x = self.pad(x)
+
+        # Smoothen (blur) with the kernel
+        x = F.conv2d(x, self.kernel)
+
+        # Reshape and return
+        return x.view(b, c, h, w)
+
+
+class EqualizedLinear(nn.Module):
+    """
+    <a id="equalized_linear"></a>
+
+    ## Learning-rate Equalized Linear Layer
+
+    This uses [learning-rate equalized weights](#equalized_weights) for a linear layer.
+    """
+
+    def __init__(self, in_features: int, out_features: int, bias: float = 0.):
+        """
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        * `bias` is the bias initialization constant
+        """
+
+        super().__init__()
+        # [Learning-rate equalized weights](#equalized_weights)
+        self.weight = EqualizedWeight([out_features, in_features])
+        # Bias
+        self.bias = nn.Parameter(torch.ones(out_features) * bias)
+
+    def forward(self, x: torch.Tensor):
+        # Linear transformation
+        return F.linear(x, self.weight(), bias=self.bias)
+
+
+class EqualizedConv2d(nn.Module):
+    """
+    <a id="equalized_conv2d"></a>
+
+    ## Learning-rate Equalized 2D Convolution Layer
+
+    This uses [learning-rate equalized weights](#equalized_weights) for a convolution layer.
+    """
+
+    def __init__(self, in_features: int, out_features: int,
+                 kernel_size: int, padding: int = 0):
+        """
+        * `in_features` is the number of features in the input feature map
+        * `out_features` is the number of features in the output feature map
+        * `kernel_size` is the size of the convolution kernel
+        * `padding` is the padding to be added on both sides of each size dimension
+        """
+        super().__init__()
+        # Padding size
+        self.padding = padding
+        # [Learning-rate equalized weights](#equalized_weights)
+        self.weight = EqualizedWeight([out_features, in_features, kernel_size, kernel_size])
+        # Bias
+        self.bias = nn.Parameter(torch.ones(out_features))
+
+    def forward(self, x: torch.Tensor):
+        # Convolution
+        return F.conv2d(x, self.weight(), bias=self.bias, padding=self.padding)
+
+
+class EqualizedWeight(nn.Module):
+    """
+    <a id="equalized_weight"></a>
+
+    ## Learning-rate Equalized Weights Parameter
+
+    This is based on equalized learning rate introduced in the Progressive GAN paper.
+    Instead of initializing weights at $\mathcal{N}(0,c)$ they initialize weights
+    to $\mathcal{N}(0, 1)$ and then multiply them by $c$ when using it.
+    $$w_i = c \hat{w}_i$$
+
+    The gradients on stored parameters $\hat{w}$ get multiplied by $c$ but this doesn't have
+    an affect since optimizers such as Adam normalize them by a running mean of the squared gradients.
+
+    The optimizer updates on $\hat{w}$ are proportionate to the learning rate $\lambda$.
+    But the effective weights $w$ get updated proportionately to $c \lambda$.
+    Without equalized learning rate, the effective weights will get updated proportionately to just $\lambda$.
+
+    So we are effectively scaling the learning rate by $c$ for these weight parameters.
+    """
+
+    def __init__(self, shape: List[int]):
+        """
+        * `shape` is the shape of the weight parameter
+        """
+        super().__init__()
+
+        # He initialization constant
+        self.c = 1 / math.sqrt(np.prod(shape[1:]))
+        # Initialize the weights with $\mathcal{N}(0, 1)$
+        self.weight = nn.Parameter(torch.randn(shape))
+        # Weight multiplication coefficient
+
+    def forward(self):
+        # Multiply the weights by $c$ and return
+        return self.weight * self.c
+
+
+class GradientPenalty(nn.Module):
+    """
+    <a id="gradient_penalty"></a>
+
+    ## Gradient Penalty
+
+    This is the $R_1$ regularization penality from the paper
+    [Which Training Methods for GANs do actually Converge?](https://papers.labml.ai/paper/1801.04406).
+
+    $$R_1(\psi) = \frac{\gamma}{2} \mathbb{E}_{p_\mathcal{D}(x)}
+    \Big[\Vert \nabla_x D_\psi(x)^2 \Vert\Big]$$
+
+    That is we try to reduce the L2 norm of gradients of the discriminator with
+    respect to images, for real images ($P_\mathcal{D}$).
+    """
+
+    def forward(self, x: torch.Tensor, d: torch.Tensor):
+        """
+        * `x` is $x \sim \mathcal{D}$
+        * `d` is $D(x)$
+        """
+
+        # Get batch size
+        batch_size = x.shape[0]
+
+        # Calculate gradients of $D(x)$ with respect to $x$.
+        # `grad_outputs` is set to $1$ since we want the gradients of $D(x)$,
+        # and we need to create and retain graph since we have to compute gradients
+        # with respect to weight on this loss.
+        gradients, *_ = torch.autograd.grad(outputs=d,
+                                            inputs=x,
+                                            grad_outputs=d.new_ones(d.shape),
+                                            create_graph=True)
+
+        # Reshape gradients to calculate the norm
+        gradients = gradients.reshape(batch_size, -1)
+        # Calculate the norm $\Vert \nabla_{x} D(x)^2 \Vert$
+        norm = gradients.norm(2, dim=-1)
+        # Return the loss $\Vert \nabla_x D_\psi(x)^2 \Vert$
+        return torch.mean(norm ** 2)
+
+
+class PathLengthPenalty(nn.Module):
+    """
+    <a id="path_length_penalty"></a>
+
+    ## Path Length Penalty
+
+    This regularization encourages a fixed-size step in $w$ to result in a fixed-magnitude
+    change in the image.
+
+    $$\mathbb{E}_{w \sim f(z), y \sim \mathcal{N}(0, \mathbf{I})}
+      \Big(\Vert \mathbf{J}^\top_{w} y \Vert_2 - a \Big)^2$$
+
+    where $\mathbf{J}_w$ is the Jacobian
+    $\mathbf{J}_w = \frac{\partial g}{\partial w}$,
+    $w$ are sampled from $w \in \mathcal{W}$ from the mapping network, and
+    $y$ are images with noise $\mathcal{N}(0, \mathbf{I})$.
+
+    $a$ is the exponential moving average of $\Vert \mathbf{J}^\top_{w} y \Vert_2$
+    as the training progresses.
+
+    $\mathbf{J}^\top_{w} y$ is calculated without explicitly calculating the Jacobian using
+    $$\mathbf{J}^\top_{w} y = \nabla_w \big(g(w) \cdot y \big)$$
+    """
+
+    def __init__(self, beta: float):
+        """
+        * `beta` is the constant $\beta$ used to calculate the exponential moving average $a$
+        """
+        super().__init__()
+
+        # $\beta$
+        self.beta = beta
+        # Number of steps calculated $N$
+        self.steps = nn.Parameter(torch.tensor(0.), requires_grad=False)
+        # Exponential sum of $\mathbf{J}^\top_{w} y$
+        # $$\sum^N_{i=1} \beta^{(N - i)}[\mathbf{J}^\top_{w} y]_i$$
+        # where $[\mathbf{J}^\top_{w} y]_i$ is the value of it at $i$-th step of training
+        self.exp_sum_a = nn.Parameter(torch.tensor(0.), requires_grad=False)
+
+    def forward(self, w: torch.Tensor, x: torch.Tensor):
+        """
+        * `w` is the batch of $w$ of shape `[batch_size, d_latent]`
+        * `x` are the generated images of shape `[batch_size, 3, height, width]`
+        """
+
+        # Get the device
+        device = x.device
+        # Get number of pixels
+        image_size = x.shape[2] * x.shape[3]
+        # Calculate $y \in \mathcal{N}(0, \mathbf{I})$
+        y = torch.randn(x.shape, device=device)
+        # Calculate $\big(g(w) \cdot y \big)$ and normalize by the square root of image size.
+        # This is scaling is not mentioned in the paper but was present in
+        # [their implementation](https://github.com/NVlabs/stylegan2/blob/master/training/loss.py#L167).
+        output = (x * y).sum() / math.sqrt(image_size)
+
+        # Calculate gradients to get $\mathbf{J}^\top_{w} y$
+        gradients, *_ = torch.autograd.grad(outputs=output,
+                                            inputs=w,
+                                            grad_outputs=torch.ones(output.shape, device=device),
+                                            create_graph=True)
+
+        # Calculate L2-norm of $\mathbf{J}^\top_{w} y$
+        norm = (gradients ** 2).sum(dim=2).mean(dim=1).sqrt()
+
+        # Regularize after first step
+        if self.steps > 0:
+            # Calculate $a$
+            # $$\frac{1}{1 - \beta^N} \sum^N_{i=1} \beta^{(N - i)}[\mathbf{J}^\top_{w} y]_i$$
+            a = self.exp_sum_a / (1 - self.beta ** self.steps)
+            # Calculate the penalty
+            # $$\mathbb{E}_{w \sim f(z), y \sim \mathcal{N}(0, \mathbf{I})}
+            # \Big(\Vert \mathbf{J}^\top_{w} y \Vert_2 - a \Big)^2$$
+            loss = torch.mean((norm - a) ** 2)
+        else:
+            # Return a dummy loss if we can't calculate $a$
+            loss = norm.new_tensor(0)
+
+        # Calculate the mean of $\Vert \mathbf{J}^\top_{w} y \Vert_2$
+        mean = norm.mean().detach()
+        # Update exponential sum
+        self.exp_sum_a.mul_(self.beta).add_(mean, alpha=1 - self.beta)
+        # Increment $N$
+        self.steps.add_(1.)
+
+        # Return the penalty
+        return loss
+
+
+if __name__ == '__main__':
+    netD = Discriminator(log_resolution=256, n_features = 512, max_features = 512)
+    input = torch.randn(1, 3, 256, 256)
+    output = netD(input)
+    print(output.shape)
