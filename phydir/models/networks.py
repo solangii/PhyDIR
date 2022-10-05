@@ -123,17 +123,13 @@ class ConfNet(nn.Module):
             nn.ConvTranspose2d(nf, nf, kernel_size=4, stride=2, padding=1, bias=False),  # 32x32 -> 64x64
             nn.GroupNorm(16, nf),
             nn.ReLU(inplace=True),
-            nn.Conv2d(nf, 2, kernel_size=5, stride=1, padding=2, bias=False),  # 64x64
+            nn.Conv2d(nf, cout, kernel_size=5, stride=1, padding=2, bias=False),  # 64x64
             nn.Softplus()]
         self.out_net1 = nn.Sequential(*out_net1)
 
-        out_net2 = [nn.Conv2d(nf*2, 2, kernel_size=3, stride=1, padding=1, bias=False),  # 16x16
-                    nn.Softplus()]
-        self.out_net2 = nn.Sequential(*out_net2)
-
     def forward(self, input):
         out = self.network(input)
-        return self.out_net1(out), self.out_net2(out)
+        return self.out_net1(out)
 
 # a conv layer
 class ConvLayer(nn.Module):
