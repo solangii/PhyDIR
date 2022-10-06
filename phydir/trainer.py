@@ -148,6 +148,7 @@ class Trainer():
 
             metrics.update(m, self.batch_size)
             print(f"{'T' if is_train else 'V'}{epoch:02}/{iter:05}/{metrics}")
+            torch.cuda.empty_cache()
 
             if self.use_logger and is_train:
                 total_iter = iter + epoch * self.train_iter_per_epoch
