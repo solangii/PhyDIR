@@ -29,7 +29,7 @@ def make_dataset(dir):
 
 
 class ImageDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, image_size=256, crop=None, is_validation=False):
+    def __init__(self, data_dir, image_size=256, crop=None, is_validation=False, K=None):
         super(ImageDataset, self).__init__()
         self.root = data_dir
         self.image_size = image_size
@@ -37,6 +37,7 @@ class ImageDataset(torch.utils.data.Dataset):
         self.size = len(self.ids)
         self.crop = crop
         self.is_validation = is_validation
+        self.K = K
 
     def transform(self, img, hflip=False):
         if self.crop is not None:
@@ -53,8 +54,9 @@ class ImageDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         # data : [(3, H, W), .... ]  K images, list of tensors
         data = []
-        K = np.random.randint(1, 7) # random 1~6
-        random_ind = np.random.permutation(len(self.ids[index]))[:K]
+        if self.K is None:
+            self.K = np.random.randint(1, 7) # random 1~6
+        random_ind = np.random.permutation(len(self.ids[index]))[:self.K]
         for i in random_ind:
             fpath = self.ids[index][i]
             if is_image_file(fpath):

@@ -10,6 +10,7 @@ def get_data_loaders(cfgs):
     num_workers = cfgs.get('num_workers', 4)
     image_size = cfgs.get('image_size', 256)
     crop = cfgs.get('crop', None)
+    K = cfgs.get('K', None)
 
     training_data = cfgs.get('training_data', 'celeba')
     run_train = cfgs.get('run_train', False)
@@ -19,7 +20,8 @@ def get_data_loaders(cfgs):
 
     train_loader = val_loader = test_loader = None
 
-    get_loader = lambda **kargs: get_image_loader(**kargs, datasets=training_data, batch_size=batch_size, image_size=image_size, crop=crop)
+    get_loader = lambda **kargs: get_image_loader(**kargs, datasets=training_data, batch_size=batch_size,
+                                                  image_size=image_size, crop=crop, K=K)
 
     if run_train:
         train_data_dir = os.path.join(train_val_data_dir, "train")
@@ -38,11 +40,11 @@ def get_data_loaders(cfgs):
     return train_loader, val_loader, test_loader
 
 def get_image_loader(data_dir, is_validation=False, datasets='celeba',
-    batch_size=8, num_workers=4, image_size=256, crop=None):
+    batch_size=8, num_workers=4, image_size=256, crop=None, K=None):
     data_list = []
 
     if 'celeba' in datasets:
-        celeba_dataset = ImageDataset(data_dir, image_size=image_size, crop=crop, is_validation=is_validation)
+        celeba_dataset = ImageDataset(data_dir, image_size=image_size, crop=crop, is_validation=is_validation, K=K)
         data_list.append(celeba_dataset)
     if 'casia' in datasets:
         pass # todo
