@@ -64,6 +64,7 @@ class ImageDataset(torch.utils.data.Dataset):
                 hflip = not self.is_validation and np.random.rand() > 0.5
                 img = self.transform(img, hflip)
                 data.append(img)
+        data = torch.stack(data, dim=0)
         return data
 
     def __len__(self):
