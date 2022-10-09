@@ -145,182 +145,281 @@ class PhyDIR():
         if self.K is None:
             for input in batch:
                 # data: K, 3, 256, 256 (K is random number with 1~6)
-                input_im = input.to(self.device) *2.-1.
-                k, c, h, w = input_im.shape
+                self.input_im = input.to(self.device) *2.-1.
+                k, c, h, w = self.input_im.shape
 
-                ## 3D Networks
-                # 1. predict depth
-                canon_depth_raw = self.netD(input_im).squeeze(1)
-                canon_depth = canon_depth_raw - canon_depth_raw.view(k, -1).mean(1).view(k, 1, 1)
-                canon_depth = canon_depth.tanh()
-                canon_depth = self.depth_rescaler(canon_depth)
+                ## predict depth
+                canon_depth_raw = self.netD(self.input_im).squeeze(1)
+                self.canon_depth = canon_depth_raw - canon_depth_raw.view(k, -1).mean(1).view(k, 1, 1)
+                self.canon_depth = self.canon_depth.tanh()
+                self.canon_depth = self.depth_rescaler(self.canon_depth)
 
-                # 2. predict light
-                canon_light = self.netL(input_im) # Bx4
-                canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, Bx1
-                canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, Bx1
+                ## predict light
+                canon_light = self.netL(self.input_im) # Bx4
+                self.canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, Bx1
+                self.canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, Bx1
                 canon_light_dxy = canon_light[:, 2:]
-                canon_light_d = torch.cat([canon_light_dxy, torch.ones(k, 1).to(input_im.device)], 1)
-                canon_light_d = canon_light_d / (
-                    (canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, Bx3
+                self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(k, 1).to(self.input_im.device)], 1)
+                self.canon_light_d = self.canon_light_d / (
+                    (self.canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, Bx3
 
-                # 3. predict viewpoint
-                view = self.netV(input_im)
-                view = torch.cat([
-                    view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
-                    view[:, 3:5] * self.xy_translation_range,
-                    view[:, 5:] * self.z_translation_range], 1) # Bx6
-
+                ## predict viewpoint
+                self.view = self.netV(self.input_im)
+                self.view = torch.cat([
+                    self.view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
+                    self.view[:, 3:5] * self.xy_translation_range,
+                    self.view[:, 5:] * self.z_translation_range], 1) # Bx6
 
                 ## Texture Networks
-                im_tex = self.netT(input_im) # Bx32xHxW
-                cannon_im_tex = im_tex.mean(0, keepdim=True) # 1x32xHxW
-                canon_im_tex = self.netT_conv(cannon_im_tex) # 1x32xHxW
+                self.im_tex = self.netT(self.input_im) # Bx32xHxW
+                self.cannon_im_tex = self.im_tex.mean(0, keepdim=True) # 1x32xHxW
+                self.canon_im_tex = self.netT_conv(self.cannon_im_tex) # 1x32xHxW
 
-
-                ## 3D Physical Process
-                # multi-image-shading (shading, texture)
-                canon_normal = self.renderer.get_normal_from_depth(canon_depth) # BxHxWx3
-                canon_diffuse_shading = (canon_normal * canon_light_d.view(-1, 1, 1, 3)).sum(3).clamp(
+                ## multi-image-shading (shading, texture)
+                self.canon_normal = self.renderer.get_normal_from_depth(self.canon_depth) # BxHxWx3
+                self.canon_diffuse_shading = (self.canon_normal * self.canon_light_d.view(-1, 1, 1, 3)).sum(3).clamp(
                     min=0).unsqueeze(1)
-                canon_shading = canon_light_a.view(-1, 1, 1, 1) + canon_light_b.view(-1, 1, 1,
-                                                                                               1) * canon_diffuse_shading
-                shaded_texture = canon_shading * im_tex # Bx32xHxW
-                shaded_cannon_texture = canon_shading * canon_im_tex # Bx32xHxW
+                canon_shading = self.canon_light_a.view(-1, 1, 1, 1) + self.canon_light_b.view(-1, 1, 1,
+                                                                                               1) * self.canon_diffuse_shading
+                self.shaded_texture = canon_shading * self.im_tex # Bx32xHxW
+                self.shaded_cannon_texture = canon_shading * self.canon_im_tex # Bx32xHxW
 
-                # grid sampling
-                self.renderer.set_transform_matrices(view)
-                recon_depth = self.renderer.warp_canon_depth(canon_depth)
-                grid_2d_from_canon = self.renderer.get_inv_warped_2d_grid(recon_depth)
-                recon_im_tex = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
-                recon_cannon_im_tex = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
+                ## grid sampling
+                self.renderer.set_transform_matrices(self.view)
+                self.recon_depth = self.renderer.warp_canon_depth(self.canon_depth)
+                self.recon_normal = self.renderer.get_normal_from_depth(self.recon_depth)
+                grid_2d_from_canon = self.renderer.get_inv_warped_2d_grid(self.recon_depth)
+                self.recon_im_tex = nn.functional.grid_sample(self.shaded_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
+                self.recon_cannon_im_tex = nn.functional.grid_sample(self.shaded_cannon_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
 
-                fused_im_tex = torch.cat([recon_im_tex, recon_cannon_im_tex]).mean(0)
-                fused_im_tex = self.netF_conv(fused_im_tex)
-
+                self.fused_im_tex = torch.cat([self.recon_im_tex, self.recon_cannon_im_tex]).mean(0)
+                self.fused_im_tex = self.netF_conv(self.fused_im_tex)
 
                 ## Neural Appearance Renderer
-                recon_im = self.netN(fused_im_tex)
+                self.recon_im = self.netN(self.fused_im_tex)
 
                 ## predict confidence map
                 if self.use_conf_map:
-                    conf_sigma_l1 = self.netC(input_im)  # Bx1xHxW
+                    self.conf_sigma_l1 = self.netC(self.input_im)  # Bx1xHxW
                 else:
-                    conf_sigma_l1 = None
+                    self.conf_sigma_l1 = None
 
                 ## rotated image (not sure..)
-                random_view = torch.rand(1, 6).to(input_im.device)
+                random_view = torch.rand(1, 6).to(self.input_im.device)
                 random_view = torch.cat([
                     random_view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
                     random_view[:, 3:5] * self.xy_translation_range,
                     random_view[:, 5:] * self.z_translation_range], 1) # Bx6
                 self.renderer.set_transform_matrices(random_view)
-                recon_depth_rotate = self.renderer.warp_canon_depth(canon_depth)
-                grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(recon_depth_rotate)
-                recon_im_tex_rotate = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon_rotate, mode='bilinear').unsqueeze(0)
-                recon_cannon_im_tex_rotate = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon_rotate, mode='bilinear').unsqueeze(0)
+                self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
+                grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
+                self.recon_im_tex_rotate = nn.functional.grid_sample(self.shaded_texture, grid_2d_from_canon_rotate, mode='bilinear').unsqueeze(0)
+                self.recon_cannon_im_tex_rotate = nn.functional.grid_sample(self.shaded_cannon_texture, grid_2d_from_canon_rotate, mode='bilinear').unsqueeze(0)
 
-                fused_im_tex_rotate = torch.cat([recon_im_tex_rotate, recon_cannon_im_tex_rotate]).mean(0)
-                fused_im_tex_rotate = self.netF_conv(fused_im_tex_rotate)
-                recon_im_rotate = self.netN(fused_im_tex_rotate)
+                self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_cannon_im_tex_rotate]).mean(0)
+                self.fused_im_tex_rotate = self.netF_conv(self.fused_im_tex_rotate)
+                self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
 
                 ## loss function
-                loss_recon = self.photometric_loss(recon_im, input_im, conf_sigma_l1)
+                loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
                 # self.loss_adv =
-                loss_tex = (self.netT(recon_im_rotate) - self.netT(input_im)).abs().mean()
-                loss_shape = (self.netD(recon_im_rotate) - self.netD(input_im)).abs().mean()
-                loss_light = (self.netL(recon_im_rotate) - self.netL(input_im)).abs().mean()
+                loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
+                loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
+                loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
                 self.loss_total += loss_recon + self.lam_shape * loss_shape +\
                               self.lam_tex * loss_tex + self.lam_l1 * loss_light
         else:
-            input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
-            b, k, c, h, w = input_im.shape
-            input_im = input_im.view(b * k, c, h, w)
+            self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
+            b, k, c, h, w = self.input_im.shape
+            self.input_im = self.input_im.view(b * k, c, h, w)
 
             ## 3D Networks
             # 1. predict depth
-            canon_depth_raw = self.netD(input_im).squeeze(1) # b*k, 1, h, w
-            canon_depth = canon_depth_raw - canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
-            canon_depth = canon_depth.tanh()
-            canon_depth = self.depth_rescaler(canon_depth)
+            canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
+            self.canon_depth = canon_depth_raw - canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
+            self.canon_depth = self.canon_depth.tanh()
+            self.canon_depth = self.depth_rescaler(self.canon_depth)
 
             # 2. predict light
-            canon_light = self.netL(input_im)  # b*k x4
-            canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, b*kx1
-            canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, b*kx1
+            canon_light = self.netL(self.input_im)  # b*k x4
+            self.canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, b*kx1
+            self.canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, b*kx1
             canon_light_dxy = canon_light[:, 2:]
-            canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k, 1).to(input_im.device)], 1)
-            canon_light_d = canon_light_d / (
-                (canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
+            self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k, 1).to(self.input_im.device)], 1)
+            self.canon_light_d = self.canon_light_d / (
+                (self.canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
 
             # 3. predict viewpoint
-            view = self.netV(input_im)
-            view = torch.cat([
-                view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
-                view[:, 3:5] * self.xy_translation_range,
-                view[:, 5:] * self.z_translation_range], 1)  # b*kx6
+            self.view = self.netV(self.input_im)
+            self.view = torch.cat([
+                self.view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
+                self.view[:, 3:5] * self.xy_translation_range,
+                self.view[:, 5:] * self.z_translation_range], 1)  # b*kx6
 
             ## Texture Networks
-            im_tex = self.netT(input_im)  # b*kx32xHxW
+            im_tex = self.netT(self.input_im)  # b*kx32xHxW
             canon_im_tex = im_tex.view(b, k, 32, h, w).mean(1)  # bx32xHxW
             canon_im_tex = self.netT_conv(canon_im_tex).repeat_interleave(k, dim=0)  # b*kx32xHxW
 
             ## 3D Physical Process
             # multi-image-shading (shading, texture)
-            canon_normal = self.renderer.get_normal_from_depth(canon_depth)  # B*k xHxWx3
-            canon_diffuse_shading = (canon_normal * canon_light_d.view(-1, 1, 1, 3)).sum(3).clamp(
+            self.canon_normal = self.renderer.get_normal_from_depth(self.canon_depth)  # B*k xHxWx3
+            self.canon_diffuse_shading = (self.canon_normal * self.canon_light_d.view(-1, 1, 1, 3)).sum(3).clamp(
                 min=0).unsqueeze(1)
-            canon_shading = canon_light_a.view(-1, 1, 1, 1) + canon_light_b.view(-1, 1, 1,
-                                                                                 1) * canon_diffuse_shading
+            canon_shading = self.canon_light_a.view(-1, 1, 1, 1) + self.canon_light_b.view(-1, 1, 1,
+                                                                                 1) * self.canon_diffuse_shading
             shaded_texture = canon_shading * im_tex  # B*Kx32xHxW
             shaded_cannon_texture = canon_shading * canon_im_tex  # B*kx32xHxW
 
             # grid sampling
-            self.renderer.set_transform_matrices(view)
-            recon_depth = self.renderer.warp_canon_depth(canon_depth)
-            grid_2d_from_canon = self.renderer.get_inv_warped_2d_grid(recon_depth)
-            recon_im_tex = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
-            recon_cannon_im_tex = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon,
+            self.renderer.set_transform_matrices(self.view)
+            self.recon_depth = self.renderer.warp_canon_depth(self.canon_depth)
+            self.recon_normal = self.renderer.get_normal_from_depth(self.recon_depth)
+
+            grid_2d_from_canon = self.renderer.get_inv_warped_2d_grid(self.recon_depth)
+            self.recon_im_tex = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
+            self.recon_cannon_im_tex = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon,
                                                             mode='bilinear').unsqueeze(0)
 
-            fused_im_tex = torch.cat([recon_im_tex, recon_cannon_im_tex]).mean(0)
-            fused_im_tex = self.netF_conv(fused_im_tex)
+            self.fused_im_tex = torch.cat([self.recon_im_tex, self.recon_cannon_im_tex]).mean(0)
+            self.fused_im_tex = self.netF_conv(self.fused_im_tex)
 
             ## Neural Appearance Renderer
-            recon_im = self.netN(fused_im_tex)
+            self.recon_im = self.netN(self.fused_im_tex)
 
             ## predict confidence map
             if self.use_conf_map:
-                conf_sigma_l1 = self.netC(input_im)  # B*kx1xHxW
+                self.conf_sigma_l1 = self.netC(self.input_im)  # B*kx1xHxW
             else:
-                conf_sigma_l1 = None
+                self.conf_sigma_l1 = None
 
             ## rotated image (not sure..)
-            random_view = torch.rand(1, 6).to(input_im.device)
+            random_view = torch.rand(1, 6).to(self.input_im.device)
             random_view = torch.cat([
                 random_view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
                 random_view[:, 3:5] * self.xy_translation_range,
                 random_view[:, 5:] * self.z_translation_range], 1)  # Bx6
             self.renderer.set_transform_matrices(random_view)
-            recon_depth_rotate = self.renderer.warp_canon_depth(canon_depth)
-            grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(recon_depth_rotate)
-            recon_im_tex_rotate = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon_rotate,
+            self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
+            grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
+            self.recon_im_tex_rotate = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon_rotate,
                                                             mode='bilinear').unsqueeze(0)
-            recon_cannon_im_tex_rotate = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon_rotate,
+            self.recon_cannon_im_tex_rotate = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon_rotate,
                                                                    mode='bilinear').unsqueeze(0)
 
-            fused_im_tex_rotate = torch.cat([recon_im_tex_rotate, recon_cannon_im_tex_rotate]).mean(0)
-            fused_im_tex_rotate = self.netF_conv(fused_im_tex_rotate)
-            recon_im_rotate = self.netN(fused_im_tex_rotate)
+            self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_cannon_im_tex_rotate]).mean(0)
+            self.fused_im_tex_rotate = self.netF_conv(self.fused_im_tex_rotate)
+            self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
 
             ## loss function
-            loss_recon = self.photometric_loss(recon_im, input_im, conf_sigma_l1)
+            loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
             # self.loss_adv =
-            loss_tex = (self.netT(recon_im_rotate) - self.netT(input_im)).abs().mean()
-            loss_shape = (self.netD(recon_im_rotate) - self.netD(input_im)).abs().mean()
-            loss_light = (self.netL(recon_im_rotate) - self.netL(input_im)).abs().mean()
+            loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
+            loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
+            loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
             self.loss_total += loss_recon + self.lam_shape * loss_shape + \
                                self.lam_tex * loss_tex + self.lam_l1 * loss_light
 
         metrics = {'loss': self.loss_total}
         return metrics
+
+    def save_results(self, save_dir):
+        if self.K is None:
+            k, c, h, w = self.input_im.shape
+
+            with torch.no_grad():
+                v0 = torch.FloatTensor([-0.1*math.pi/180*60,0,0,0,0,0]).to(self.input_im.device).repeat(k,1)
+                # canon_im_rotate = self.renderer.render_yaw(self.canon_im, self.canon_depth, v_before=v0,
+                #                                            maxr=90, nsample=15)  # (B,T,C,H,W)
+                # canon_im_rotate = canon_im_rotate.clamp(-1, 1).detach().cpu() / 2 + 0.5
+                canon_normal_rotate = self.renderer.render_yaw(self.canon_normal.permute(0,3,1,2), self.canon_depth, v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
+                canon_normal_rotate = canon_normal_rotate.clamp(-1,1).detach().cpu() /2+0.5
+
+            input_im = self.input_im.detach().cpu().numpy() /2+0.5
+            recon_im = self.recon_im.clamp(-1,1).detach().cpu().numpy() /2+0.5
+            canon_depth = ((self.canon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+            recon_depth = ((self.recon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+            canon_diffuse_shading = self.canon_diffuse_shading.detach().cpu().numpy()
+            canon_normal = self.canon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+            recon_normal = self.recon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+            im_tex = self.canon_im_tex.detach().cpu().numpy() /2+0.5
+            recon_im_tex = self.recon_im_tex.clamp(-1,1).detach().cpu().numpy() /2+0.5
+
+
+            if self.use_conf_map:
+                conf_map_l1 = 1/(1+self.conf_sigma_l1.detach().cpu().numpy()+EPS)
+            canon_light = torch.cat([self.canon_light_a, self.canon_light_b, self.canon_light_d], 1).detach().cpu().numpy()
+            view = self.view.detach().cpu().numpy()
+
+            # canon_im_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(k ** 0.5))) for img in
+            #                         torch.unbind(canon_im_rotate, 1)]  # [(C,H,W)]*T
+            # canon_im_rotate_grid = torch.stack(canon_im_rotate_grid, 0).unsqueeze(0).numpy()  # (1,T,C,H,W)
+            canon_normal_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(k**0.5))) for img in torch.unbind(canon_normal_rotate,1)]  # [(C,H,W)]*T
+            canon_normal_rotate_grid = torch.stack(canon_normal_rotate_grid, 0).unsqueeze(0).numpy()  # (1,T,C,H,W)
+
+            sep_folder = True
+            utils.save_images(save_dir, input_im, suffix='input_image', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_im, suffix='recon_image', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_depth, suffix='canonical_depth', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_depth, suffix='recon_depth', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_diffuse_shading, suffix='canonical_diffuse_shading', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_normal, suffix='canonical_normal', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_normal, suffix='recon_normal', sep_folder=sep_folder)
+            if self.use_conf_map:
+                utils.save_images(save_dir, conf_map_l1, suffix='conf_map_l1', sep_folder=sep_folder)
+            utils.save_txt(save_dir, canon_light, suffix='canonical_light', sep_folder=sep_folder)
+            utils.save_txt(save_dir, view, suffix='viewpoint', sep_folder=sep_folder)
+
+            # utils.save_videos(save_dir, canon_im_rotate_grid, suffix='image_video', sep_folder=sep_folder, cycle=True)
+            utils.save_videos(save_dir, canon_normal_rotate_grid, suffix='normal_video', sep_folder=sep_folder, cycle=True)
+        else:
+            n, c, h, w = self.input_im.shape
+
+            with torch.no_grad():
+                v0 = torch.FloatTensor([-0.1*math.pi/180*60,0,0,0,0,0]).to(self.input_im.device).repeat(n,1)
+                # canon_im_rotate = self.renderer.render_yaw(self.canon_im, self.canon_depth, v_before=v0,
+                #                                            maxr=90, nsample=15)  # (B,T,C,H,W)
+                # canon_im_rotate = canon_im_rotate.clamp(-1, 1).detach().cpu() / 2 + 0.5
+                canon_normal_rotate = self.renderer.render_yaw(self.canon_normal.permute(0,3,1,2), self.canon_depth, v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
+                canon_normal_rotate = canon_normal_rotate.clamp(-1,1).detach().cpu() /2+0.5
+
+            input_im = self.input_im.detach().cpu().numpy() /2+0.5
+            recon_im = self.recon_im.clamp(-1,1).detach().cpu().numpy() /2+0.5
+            canon_depth = ((self.canon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+            recon_depth = ((self.recon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+            canon_diffuse_shading = self.canon_diffuse_shading.detach().cpu().numpy()
+            canon_normal = self.canon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+            recon_normal = self.recon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+            if self.use_conf_map:
+                conf_map_l1 = 1/(1+self.conf_sigma_l1.detach().cpu().numpy()+EPS)
+            canon_light = torch.cat([self.canon_light_a, self.canon_light_b, self.canon_light_d], 1).detach().cpu().numpy()
+            view = self.view.detach().cpu().numpy()
+
+            # canon_im_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(k ** 0.5))) for img in
+            #                         torch.unbind(canon_im_rotate, 1)]  # [(C,H,W)]*T
+            # canon_im_rotate_grid = torch.stack(canon_im_rotate_grid, 0).unsqueeze(0).numpy()  # (1,T,C,H,W)
+            canon_normal_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(n**0.5))) for img in torch.unbind(canon_normal_rotate,1)]  # [(C,H,W)]*T
+            canon_normal_rotate_grid = torch.stack(canon_normal_rotate_grid, 0).unsqueeze(0).numpy()  # (1,T,C,H,W)
+
+            sep_folder = True
+            utils.save_images(save_dir, input_im, suffix='input_image', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_im, suffix='recon_image', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_depth, suffix='canonical_depth', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_depth, suffix='recon_depth', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_diffuse_shading, suffix='canonical_diffuse_shading', sep_folder=sep_folder)
+            utils.save_images(save_dir, canon_normal, suffix='canonical_normal', sep_folder=sep_folder)
+            utils.save_images(save_dir, recon_normal, suffix='recon_normal', sep_folder=sep_folder)
+            if self.use_conf_map:
+                utils.save_images(save_dir, conf_map_l1, suffix='conf_map_l1', sep_folder=sep_folder)
+            utils.save_txt(save_dir, canon_light, suffix='canonical_light', sep_folder=sep_folder)
+            utils.save_txt(save_dir, view, suffix='viewpoint', sep_folder=sep_folder)
+
+            # utils.save_videos(save_dir, canon_im_rotate_grid, suffix='image_video', sep_folder=sep_folder, cycle=True)
+            utils.save_videos(save_dir, canon_normal_rotate_grid, suffix='normal_video', sep_folder=sep_folder, cycle=True)
+
+    def save_score(self):
+        pass
+
+    def visualize(self):
+        pass
+

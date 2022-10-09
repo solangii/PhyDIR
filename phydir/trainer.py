@@ -80,8 +80,8 @@ class Trainer():
         with torch.no_grad():
             m = self.run_epoch(self.test_loader, epoch=self.current_epoch, is_test=True)
 
-        score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
-        self.model.save_scores(score_path)
+        # score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
+        # self.model.save_scores(score_path)
 
     def train(self):
         """Perform training."""
@@ -126,7 +126,7 @@ class Trainer():
             self.metrics_trace.plot(pdf_path=os.path.join(self.checkpoint_dir, 'metrics.pdf'))
             self.metrics_trace.save(os.path.join(self.checkpoint_dir, 'metrics.json'))
 
-        print(f"Training completed after {epoch+1} epochs.")
+        # print(f"Training completed after {epoch+1} epochs.")
 
     def run_epoch(self, loader, epoch=0, is_validation=False, is_test=False):
         is_train = not is_validation and not is_test
@@ -144,15 +144,16 @@ class Trainer():
             if is_train:
                 self.model.backward()
             elif is_test:
-                self.model.save_results(self.test_result_dir)
+                if iter<10:
+                    self.model.save_results(self.test_result_dir)
 
             metrics.update(m, self.batch_size)
             print(f"{'T' if is_train else 'V'}{epoch:02}/{iter:05}/{metrics}")
-            torch.cuda.empty_cache()
 
             if self.use_logger and is_train:
                 total_iter = iter + epoch * self.train_iter_per_epoch
                 if total_iter % self.log_freq == 0:
                     self.model.forward(self.viz_input)
                     self.model.visualize(self.logger, total_iter=total_iter, max_bs=25)
+            torch.cuda.empty_cache()
         return metrics
