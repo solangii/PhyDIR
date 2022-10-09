@@ -417,3 +417,9 @@ class PhyDIR():
             # utils.save_videos(save_dir, canon_im_rotate_grid, suffix='image_video', sep_folder=sep_folder, cycle=True)
             utils.save_videos(save_dir, canon_normal_rotate_grid, suffix='normal_video', sep_folder=sep_folder, cycle=True)
 
+    def save_score(self):
+        pass
+
+    def visualize(self):
+        pass
+
