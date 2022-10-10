@@ -77,9 +77,10 @@ def archive_code(arc_path, filetypes=['.py', '.yml']):
     xmkdir(os.path.dirname(arc_path))
     zipf = zipfile.ZipFile(arc_path, 'w', zipfile.ZIP_DEFLATED)
     cur_dir = os.getcwd()
+    src_dir = os.path.join(cur_dir, 'phydir')
     flist = []
     for ftype in filetypes:
-        flist.extend(glob.glob(os.path.join(cur_dir, '**', '*'+ftype), recursive=True))
+        flist.extend(glob.glob(os.path.join(src_dir, '**', '*'+ftype), recursive=True))
     [zipf.write(f, arcname=f.replace(cur_dir,'archived_code', 1)) for f in flist]
     zipf.close()
 
