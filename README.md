@@ -5,7 +5,6 @@ Pytorch implementation of Physically-Guided Disentangled Implicit Rendering for 
 ```
 exp env: nsml v2
 gpu: V100-1
-
 ```
 1. Environment setup
     - set up your environment following the [official guide](https://github.com/elliottwu/unsup3d)
@@ -16,7 +15,7 @@ mkdir data
 ln -s /mnt/video-nfs5/users/solang/src/phydir/data/ data/
 ```
 3. Training
-- change `phydir path`, `conda path` and `config name`
+    - change `phydir path`, `conda path` and `config name`
 ```
 cd [phydir] && \
 source /home/nsml/anaconda3/etc/profile.d/conda.sh && \
