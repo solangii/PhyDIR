@@ -30,7 +30,7 @@ class PhyDIR():
         self.lam_adv = cfgs.get('lam_adv', 0.5)
         self.lam_shape = cfgs.get('lam_shape', 0.3)
         self.lam_tex = cfgs.get('lam_tex', 0.3)
-        self.lam_l1 = cfgs.get('lam_l1', 0.3)
+        self.lam_light = cfgs.get('lam_light', 0.3)
         self.lr = cfgs.get('lr', 1e-4)
         self.K = cfgs.get('K', None)
         self.renderer = Renderer(cfgs)
@@ -227,7 +227,7 @@ class PhyDIR():
                 loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
                 loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
                 self.loss_total += loss_recon + self.lam_shape * loss_shape +\
-                              self.lam_tex * loss_tex + self.lam_l1 * loss_light
+                              self.lam_tex * loss_tex + self.lam_light * loss_light
         else:
             self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
             b, k, c, h, w = self.input_im.shape
@@ -318,7 +318,7 @@ class PhyDIR():
             loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
             loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
             self.loss_total += loss_recon + self.lam_shape * loss_shape + \
-                               self.lam_tex * loss_tex + self.lam_l1 * loss_light
+                               self.lam_tex * loss_tex + self.lam_light * loss_light
 
         metrics = {'loss': self.loss_total}
         return metrics
