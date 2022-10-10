@@ -13,7 +13,7 @@ EPS = 1e-7
 
 class PhyDIR():
     def __init__(self, cfgs):
-        self.model_name = cfgs.get('model_name', self.__class__.__name__)
+        self.exp_name = cfgs.get('exp_name', self.__class__.__name__)
         self.device = cfgs.get('device', 'cpu')
         self.batch_size = cfgs.get('batch_size', 1)
         self.image_size = cfgs.get('image_size', 256)
@@ -60,22 +60,17 @@ class PhyDIR():
         self.diff_light_rescaler = lambda x : (1+x)/2 *self.max_diff_light + (1-x)/2 *self.min_diff_light
 
     def init_optimizers(self, stage=None):
-        if stage is 1:
-            self.network_names = ['netC', 'netT', 'netN', 'netT_conv', 'netF_conv']
-        elif stage is 2:
-            self.network_names = ['netC', 'netD', 'netL', 'netV']
-        elif stage is 3:
-            self.network_names = ['netC', 'netD', 'netL', 'netV', 'netT', 'netN', 'netT_conv', 'netF_conv']
-        self.network_names_not = [k for k in vars(self) if 'net' in k]
-        for k in self.network_names:
-            self.network_names_not.remove(k)
-        self.network_names_not.remove('network_names')
-
-        self.set_requires_grad(self.network_names_not, requires_grad=False)
-        self.set_requires_grad(self.network_names, requires_grad=True)
+        target_nets = {1: ['netC', 'netT', 'netN', 'netT_conv', 'netF_conv'],
+                       2: ['netC', 'netD', 'netL', 'netV'],
+                       3: ['netC', 'netD', 'netL', 'netV', 'netT', 'netN', 'netT_conv', 'netF_conv']}
+        freeze_nets = {1: ['netD', 'netL', 'netV'],
+                       2: ['netT', 'netN', 'netT_conv', 'netF_conv'],
+                       3: []}
+        self.set_requires_grad(freeze_nets[stage], requires_grad=False)
+        self.set_requires_grad(target_nets[stage], requires_grad=True)
 
         self.optimizer_names = []
-        for net_name in self.network_names:
+        for net_name in target_nets[stage]:
             optimizer = self.make_optimizer(getattr(self, net_name))
             optim_name = net_name.replace('net','optimizer')
             setattr(self, optim_name, optimizer)
@@ -111,15 +106,10 @@ class PhyDIR():
         self.device = device
         for net_name in self.network_names:
             setattr(self, net_name, getattr(self, net_name).to(device))
-        # if self.other_param_names:
-        #     for param_name in self.other_param_names:
-        #         setattr(self, param_name, getattr(self, param_name).to(device))
 
     def set_train(self):
         for net_name in self.network_names:
             getattr(self, net_name).train()
-        for net_name in self.network_names_not:
-            getattr(self, net_name).eval()
 
     def set_eval(self):
         for net_name in self.network_names:
