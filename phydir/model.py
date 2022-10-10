@@ -59,14 +59,20 @@ class PhyDIR():
         self.amb_light_rescaler = lambda x : (1+x)/2 *self.max_amb_light + (1-x)/2 *self.min_amb_light
         self.diff_light_rescaler = lambda x : (1+x)/2 *self.max_diff_light + (1-x)/2 *self.min_diff_light
 
-    def init_optimizers(self):
-        # todo stage 고도화
-        self.network_names = ['netC', 'netT', 'netN']
-
+    def init_optimizers(self, stage=None):
+        if stage is 1:
+            self.network_names = ['netC', 'netT', 'netN', 'netT_conv', 'netF_conv']
+        elif stage is 2:
+            self.network_names = ['netC', 'netD', 'netL', 'netV']
+        elif stage is 3:
+            self.network_names = ['netC', 'netD', 'netL', 'netV', 'netT', 'netN', 'netT_conv', 'netF_conv']
         self.network_names_not = [k for k in vars(self) if 'net' in k]
         for k in self.network_names:
             self.network_names_not.remove(k)
         self.network_names_not.remove('network_names')
+
+        self.set_requires_grad(self.network_names_not, requires_grad=False)
+        self.set_requires_grad(self.network_names, requires_grad=True)
 
         self.optimizer_names = []
         for net_name in self.network_names:
@@ -74,6 +80,10 @@ class PhyDIR():
             optim_name = net_name.replace('net','optimizer')
             setattr(self, optim_name, optimizer)
             self.optimizer_names += [optim_name]
+
+    def set_requires_grad(self, net_names, requires_grad=True):
+        for net_name in net_names:
+            utils.set_requires_grad(getattr(self, net_name), requires_grad)
 
     def load_model_state(self, cp):
         for k in cp:

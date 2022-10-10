@@ -21,6 +21,7 @@ class Trainer():
         self.archive_code = cfgs.get('archive_code', True)
         self.checkpoint_name = cfgs.get('checkpoint_name', None)
         self.test_result_dir = cfgs.get('test_result_dir', None)
+        self.stage = cfgs.get('stage', None) # 1. unet, 2. 3d, 3. joint
         self.cfgs = cfgs
 
         self.metrics_trace = meters.MetricsTrace()
@@ -28,7 +29,6 @@ class Trainer():
         self.model = model(cfgs)
         self.model.trainer = self
         self.train_loader, self.val_loader, self.test_loader = get_data_loaders(cfgs)
-
 
     def load_checkpoint(self, optim=True):
         """Search the specified/latest checkpoint in checkpoint_dir and load the model and optimizer."""
@@ -95,7 +95,7 @@ class Trainer():
         self.metrics_trace.reset()
         self.train_iter_per_epoch = len(self.train_loader)
         self.model.to_device(self.device)
-        self.model.init_optimizers()
+        self.model.init_optimizers(self.stage)
 
         ## resume from checkpoint
         if self.resume:
