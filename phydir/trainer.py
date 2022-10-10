@@ -7,20 +7,24 @@ from . import meters
 from . import utils
 from .datasets.dataloaders import get_data_loaders
 
+
 class Trainer():
     def __init__(self, cfgs, model):
         self.device = cfgs.get('device', 'cpu')
         self.num_epochs = cfgs.get('num_epochs', 60)
         self.batch_size = cfgs.get('batch_size', 8)
-        self.checkpoint_dir = cfgs.get('checkpoint_dir', 'results')
         self.save_checkpoint_freq = cfgs.get('save_checkpoint_freq', 1)
         self.keep_num_checkpoint = cfgs.get('keep_num_checkpoint', 2)  # -1 for keeping all checkpoints
         self.resume = cfgs.get('resume', True)
-        self.use_logger = cfgs.get('use_logger', True)
+        self.use_logger = cfgs.get('use_logger', True) #todo add logger
         self.log_freq = cfgs.get('log_freq', 1000)
         self.archive_code = cfgs.get('archive_code', True)
+        self.checkpoint_dir = cfgs.get('checkpoint_dir', None)
         self.checkpoint_name = cfgs.get('checkpoint_name', None)
+        self.result_dir = cfgs.get('result_dir', None)
         self.test_result_dir = cfgs.get('test_result_dir', None)
+        self.stage = cfgs.get('stage', None) # 1. unet, 2. 3d, 3. joint
+        self.pretrain_dir = cfgs.get('pretrain_dir', None) # for stage 2 and 3 (prev stage dir)
         self.cfgs = cfgs
 
         self.metrics_trace = meters.MetricsTrace()
@@ -28,16 +32,32 @@ class Trainer():
         self.model = model(cfgs)
         self.model.trainer = self
         self.train_loader, self.val_loader, self.test_loader = get_data_loaders(cfgs)
+        self.set_result_ckpt_dir()
 
 
-    def load_checkpoint(self, optim=True):
+    def set_result_ckpt_dir(self):
+        """Set result_dir, checkpoint_dir based on model name"""
+        if self.result_dir is None:
+            self.result_dir = os.path.join('results', self.model.exp_name, f'stage{self.stage}')
+        if self.checkpoint_dir is None: # for resume
+            self.checkpoint_dir = self.result_dir
+
+
+    def load_checkpoint(self, optim=True, metrics=True, epoch=True, pretrain_dir=None):
         """Search the specified/latest checkpoint in checkpoint_dir and load the model and optimizer."""
-        if self.checkpoint_name is not None:
-            checkpoint_path = os.path.join(self.checkpoint_dir, self.checkpoint_name)
+        if pretrain_dir is None:
+            if self.checkpoint_name is not None:
+                checkpoint_path = os.path.join(self.checkpoint_dir, self.checkpoint_name)
+            else:
+                checkpoints = sorted(glob.glob(os.path.join(self.checkpoint_dir, '*.pth')))
+                if len(checkpoints) == 0:
+                    return 0
+                checkpoint_path = checkpoints[-1]
+                self.checkpoint_name = os.path.basename(checkpoint_path)
         else:
-            checkpoints = sorted(glob.glob(os.path.join(self.checkpoint_dir, '*.pth')))
+            checkpoints = sorted(glob.glob(os.path.join(pretrain_dir, '*.pth'))) # pretrain_dir = 'results/[exp_name]/[prev_stage]'
             if len(checkpoints) == 0:
-                return 0
+                raise ValueError(f"No checkpoint found in {pretrain_dir}")
             checkpoint_path = checkpoints[-1]
             self.checkpoint_name = os.path.basename(checkpoint_path)
         print(f"Loading checkpoint from {checkpoint_path}")
@@ -45,24 +65,25 @@ class Trainer():
         self.model.load_model_state(cp)
         if optim:
             self.model.load_optimizer_state(cp)
-        self.metrics_trace = cp['metrics_trace']
-        epoch = cp['epoch']
+        if metrics:
+            self.metrics_trace = cp['metrics_trace']
+        epoch = cp['epoch'] if epoch else 0
         return epoch
 
     def save_checkpoint(self, epoch, optim=True):
         """Save model, optimizer, and metrics state to a checkpoint in checkpoint_dir for the specified epoch."""
-        utils.xmkdir(self.checkpoint_dir)
-        checkpoint_path = os.path.join(self.checkpoint_dir, f'checkpoint{epoch:03}.pth')
+        utils.xmkdir(self.result_dir)
+        result_path = os.path.join(self.result_dir, f'checkpoint{epoch:03}.pth')
         state_dict = self.model.get_model_state()
         if optim:
             optimizer_state = self.model.get_optimizer_state()
             state_dict = {**state_dict, **optimizer_state}
         state_dict['metrics_trace'] = self.metrics_trace
         state_dict['epoch'] = epoch
-        print(f"Saving checkpoint to {checkpoint_path}")
-        torch.save(state_dict, checkpoint_path)
+        print(f"Saving checkpoint to {result_path}")
+        torch.save(state_dict, result_path)
         if self.keep_num_checkpoint > 0:
-            utils.clean_checkpoint(self.checkpoint_dir, keep_num=self.keep_num_checkpoint)
+            utils.clean_checkpoint(self.result_dir, keep_num=self.keep_num_checkpoint)
 
     def save_clean_checkpoint(self, path):
         """Save model state only to specified path."""
@@ -87,15 +108,19 @@ class Trainer():
         """Perform training."""
         ## archive code and configs
         if self.archive_code:
-            utils.archive_code(os.path.join(self.checkpoint_dir, 'archived_code.zip'), filetypes=['.py', '.yml'])
-        utils.dump_yaml(os.path.join(self.checkpoint_dir, 'configs.yml'), self.cfgs)
+            utils.archive_code(os.path.join(self.result_dir, 'archived_code.zip'), filetypes=['.py', '.yml'])
+        utils.dump_yaml(os.path.join(self.result_dir, 'configs.yml'), self.cfgs)
 
         ## initialize
         start_epoch = 0
         self.metrics_trace.reset()
         self.train_iter_per_epoch = len(self.train_loader)
         self.model.to_device(self.device)
-        self.model.init_optimizers()
+        self.model.init_optimizers(self.stage)
+
+        ## load weights from previous stage
+        if self.pretrain_dir is not None:
+            start_epoch = self.load_checkpoint(optim=False, metrics=False, pretrain_dir=self.pretrain_dir)
 
         ## resume from checkpoint
         if self.resume:
@@ -105,13 +130,13 @@ class Trainer():
         if self.use_logger:
             from tensorboardX import SummaryWriter
             self.logger = SummaryWriter(
-                os.path.join(self.checkpoint_dir, 'logs', datetime.now().strftime("%Y%m%d-%H%M%S")))
+                os.path.join(self.result_dir, 'logs', datetime.now().strftime("%Y%m%d-%H%M%S")))
 
             ## cache one batch for visualization
             self.viz_input = self.val_loader.__iter__().__next__()
 
         ## run epochs
-        print(f"{self.model.model_name}: optimizing to {self.num_epochs} epochs")
+        print(f"{self.model.exp_name}: optimizing to {self.num_epochs} epochs")
         for epoch in range(start_epoch, self.num_epochs):
             self.current_epoch = epoch
             metrics = self.run_epoch(self.train_loader, epoch)
@@ -123,10 +148,10 @@ class Trainer():
 
             if (epoch+1) % self.save_checkpoint_freq == 0:
                 self.save_checkpoint(epoch+1, optim=True)
-            self.metrics_trace.plot(pdf_path=os.path.join(self.checkpoint_dir, 'metrics.pdf'))
-            self.metrics_trace.save(os.path.join(self.checkpoint_dir, 'metrics.json'))
+            self.metrics_trace.plot(pdf_path=os.path.join(self.result_dir, 'metrics.pdf'))
+            self.metrics_trace.save(os.path.join(self.result_dir, 'metrics.json'))
 
-        # print(f"Training completed after {epoch+1} epochs.")
+        print(f"Training completed after {epoch+1} epochs.")
 
     def run_epoch(self, loader, epoch=0, is_validation=False, is_test=False):
         is_train = not is_validation and not is_test
@@ -155,5 +180,5 @@ class Trainer():
                 if total_iter % self.log_freq == 0:
                     self.model.forward(self.viz_input)
                     self.model.visualize(self.logger, total_iter=total_iter, max_bs=25)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
         return metrics

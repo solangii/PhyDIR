@@ -12,42 +12,38 @@ def get_data_loaders(cfgs):
     crop = cfgs.get('crop', None)
     K = cfgs.get('K', None)
 
-    training_data = cfgs.get('training_data', 'celeba')
     run_train = cfgs.get('run_train', False)
-    train_val_data_dir = cfgs.get('train_val_data_dir', './data')
     run_test = cfgs.get('run_test', False)
-    test_data_dir = cfgs.get('test_data_dir', './data/test')
+
+    training_data = cfgs.get('training_data', ['celeba'])
+    data_root = cfgs.get('data_root', None)
 
     train_loader = val_loader = test_loader = None
-
-    get_loader = lambda **kargs: get_image_loader(**kargs, datasets=training_data, batch_size=batch_size,
-                                                  image_size=image_size, crop=crop, K=K)
+    get_loader = lambda **kargs: get_image_loader(**kargs, training_data=training_data, batch_size=batch_size,
+                                                  num_workers=num_workers, image_size=image_size, crop=crop, K=K)
 
     if run_train:
-        train_data_dir = os.path.join(train_val_data_dir, "train")
-        val_data_dir = os.path.join(train_val_data_dir, "val")
-        assert os.path.isdir(train_data_dir), "Training data directory does not exist: %s" %train_data_dir
-        assert os.path.isdir(val_data_dir), "Validation data directory does not exist: %s" %val_data_dir
-        print(f"Loading training data from {train_data_dir}")
-        train_loader = get_loader(data_dir=train_data_dir, is_validation=False)
-        print(f"Loading validation data from {val_data_dir}")
-        val_loader = get_loader(data_dir=val_data_dir, is_validation=True)
+        train_loader = get_loader(data_dir=data_root, partition='train')
+        val_loader = get_loader(data_dir=data_root, partition='val')
     if run_test:
-        assert os.path.isdir(test_data_dir), "Testing data directory does not exist: %s" %test_data_dir
-        print(f"Loading testing data from {test_data_dir}")
-        test_loader = get_loader(data_dir=test_data_dir, is_validation=True)
+        test_loader = get_loader(data_dir=data_root, partition='test')
 
     return train_loader, val_loader, test_loader
 
-def get_image_loader(data_dir, is_validation=False, datasets='celeba',
-    batch_size=8, num_workers=4, image_size=256, crop=None, K=None):
+def get_dataset(data_dir, training_data, partition='train', image_size=256, crop=None, K=None, is_validation=False):
     data_list = []
+    for dataset in training_data:
+        dataset_dir = os.path.join(data_dir, dataset, partition)
+        assert os.path.isdir(dataset_dir), "Training data directory does not exist: %s" %dataset_dir
+        print(f"Loading {partition} data from {dataset_dir}")
+        dataset = ImageDataset(dataset_dir, image_size=image_size, crop=crop, is_validation=is_validation, K=K)
+        data_list.append(dataset)
 
-    if 'celeba' in datasets:
-        celeba_dataset = ImageDataset(data_dir, image_size=image_size, crop=crop, is_validation=is_validation, K=K)
-        data_list.append(celeba_dataset)
-    if 'casia' in datasets:
-        pass # todo
+    return data_list
+
+def get_image_loader(data_dir, training_data, partition='train', batch_size=8, num_workers=4, image_size=256, crop=None, K=None):
+    is_validation = False if partition == 'train' else False
+    data_list = get_dataset(data_dir, training_data, partition, image_size, crop, K, is_validation)
     dataset = ConcatDataset(data_list)
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -63,7 +59,7 @@ if __name__ == '__main__':
     import argparse
     from phydir import setup_runtime
     parser = argparse.ArgumentParser(description='Training configurations.')
-    parser.add_argument('--config', default='configs/debug.yml', type=str, help='Specify a config file path')
+    parser.add_argument('--config', default='configs/train_stage1.yml', type=str, help='Specify a config file path')
     parser.add_argument('--gpu', default=0, type=int, help='Specify a GPU device')
     parser.add_argument('--num_workers', default=4, type=int,
                         help='Specify the number of worker threads for data loaders')

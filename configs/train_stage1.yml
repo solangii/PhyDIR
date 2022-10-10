@@ -1,0 +1,29 @@
+## train stage 1
+## trainer
+run_train: True
+num_epochs: 40
+batch_size: 8
+save_checkpoint_freq: 1
+keep_num_checkpoint: 2
+resume: True
+use_logger: False
+log_freq: 1000
+archive_code: True
+#checkpoint_dir: results/default/stage1
+#checkpoint_name: checkpoint001.pth (None -> latest)
+#result_dir: results/[exp_name]/[stage]
+stage: 1
+
+## dataloader
+num_workers: 4
+image_size: 256
+training_data: ['celeba', 'casia_webface']
+data_root: data/
+
+## model
+exp_name: train_celeba # exp_name
+lr: 1e-4
+lam_adv: 0.5
+lam_shape: 0.1
+lam_tex: 0.3
+lam_light: 0.3

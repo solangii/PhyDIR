@@ -13,7 +13,7 @@ EPS = 1e-7
 
 class PhyDIR():
     def __init__(self, cfgs):
-        self.model_name = cfgs.get('model_name', self.__class__.__name__)
+        self.exp_name = cfgs.get('exp_name', self.__class__.__name__)
         self.device = cfgs.get('device', 'cpu')
         self.batch_size = cfgs.get('batch_size', 1)
         self.image_size = cfgs.get('image_size', 256)
@@ -30,7 +30,7 @@ class PhyDIR():
         self.lam_adv = cfgs.get('lam_adv', 0.5)
         self.lam_shape = cfgs.get('lam_shape', 0.3)
         self.lam_tex = cfgs.get('lam_tex', 0.3)
-        self.lam_l1 = cfgs.get('lam_l1', 0.3)
+        self.lam_light = cfgs.get('lam_light', 0.3)
         self.lr = cfgs.get('lr', 1e-4)
         self.K = cfgs.get('K', None)
         self.renderer = Renderer(cfgs)
@@ -50,7 +50,7 @@ class PhyDIR():
         self.network_names = [k for k in vars(self) if 'net' in k]
         self.make_optimizer = lambda model: torch.optim.Adam(
             filter(lambda p: p.requires_grad, model.parameters()),
-            lr=self.lr, betas=(0.9, 0.999), weight_decay=5e-4) # todo weight decay?
+            lr=self.lr, betas=(0.9, 0.999))
 
         ## other parameters
 
@@ -59,21 +59,26 @@ class PhyDIR():
         self.amb_light_rescaler = lambda x : (1+x)/2 *self.max_amb_light + (1-x)/2 *self.min_amb_light
         self.diff_light_rescaler = lambda x : (1+x)/2 *self.max_diff_light + (1-x)/2 *self.min_diff_light
 
-    def init_optimizers(self):
-        # todo stage 고도화
-        self.network_names = ['netC', 'netT', 'netN']
-
-        self.network_names_not = [k for k in vars(self) if 'net' in k]
-        for k in self.network_names:
-            self.network_names_not.remove(k)
-        self.network_names_not.remove('network_names')
+    def init_optimizers(self, stage=None):
+        target_nets = {1: ['netC', 'netT', 'netN', 'netT_conv', 'netF_conv'],
+                       2: ['netC', 'netD', 'netL', 'netV'],
+                       3: ['netC', 'netD', 'netL', 'netV', 'netT', 'netN', 'netT_conv', 'netF_conv']}
+        freeze_nets = {1: ['netD', 'netL', 'netV'],
+                       2: ['netT', 'netN', 'netT_conv', 'netF_conv'],
+                       3: []}
+        self.set_requires_grad(freeze_nets[stage], requires_grad=False)
+        self.set_requires_grad(target_nets[stage], requires_grad=True)
 
         self.optimizer_names = []
-        for net_name in self.network_names:
+        for net_name in target_nets[stage]:
             optimizer = self.make_optimizer(getattr(self, net_name))
             optim_name = net_name.replace('net','optimizer')
             setattr(self, optim_name, optimizer)
             self.optimizer_names += [optim_name]
+
+    def set_requires_grad(self, net_names, requires_grad=True):
+        for net_name in net_names:
+            utils.set_requires_grad(getattr(self, net_name), requires_grad)
 
     def load_model_state(self, cp):
         for k in cp:
@@ -101,15 +106,10 @@ class PhyDIR():
         self.device = device
         for net_name in self.network_names:
             setattr(self, net_name, getattr(self, net_name).to(device))
-        # if self.other_param_names:
-        #     for param_name in self.other_param_names:
-        #         setattr(self, param_name, getattr(self, param_name).to(device))
 
     def set_train(self):
         for net_name in self.network_names:
             getattr(self, net_name).train()
-        for net_name in self.network_names_not:
-            getattr(self, net_name).eval()
 
     def set_eval(self):
         for net_name in self.network_names:
@@ -227,7 +227,7 @@ class PhyDIR():
                 loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
                 loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
                 self.loss_total += loss_recon + self.lam_shape * loss_shape +\
-                              self.lam_tex * loss_tex + self.lam_l1 * loss_light
+                              self.lam_tex * loss_tex + self.lam_light * loss_light
         else:
             self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
             b, k, c, h, w = self.input_im.shape
@@ -318,7 +318,7 @@ class PhyDIR():
             loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
             loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
             self.loss_total += loss_recon + self.lam_shape * loss_shape + \
-                               self.lam_tex * loss_tex + self.lam_l1 * loss_light
+                               self.lam_tex * loss_tex + self.lam_light * loss_light
 
         metrics = {'loss': self.loss_total}
         return metrics
