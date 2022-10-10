@@ -50,7 +50,7 @@ class PhyDIR():
         self.network_names = [k for k in vars(self) if 'net' in k]
         self.make_optimizer = lambda model: torch.optim.Adam(
             filter(lambda p: p.requires_grad, model.parameters()),
-            lr=self.lr, betas=(0.9, 0.999), weight_decay=5e-4) # todo weight decay?
+            lr=self.lr, betas=(0.9, 0.999))
 
         ## other parameters
 
