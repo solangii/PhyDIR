@@ -4,6 +4,6 @@ __pycache__
 phydir/.DS_STORE
 
 /unsup3d/
-/data/
+/data/*
 
 *.zip
