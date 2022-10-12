@@ -235,8 +235,8 @@ class PhyDIR():
 
             ## 3D Networks
             # 1. predict depth
-            canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
-            self.canon_depth = canon_depth_raw - canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
+            self.canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
+            self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
             self.canon_depth = self.canon_depth.tanh()
             self.canon_depth = self.depth_rescaler(self.canon_depth)
 
@@ -312,13 +312,13 @@ class PhyDIR():
             self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
 
             ## loss function
-            loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
+            self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
             # self.loss_adv =
-            loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
-            loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
-            loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
-            self.loss_total += loss_recon + self.lam_shape * loss_shape + \
-                               self.lam_tex * loss_tex + self.lam_light * loss_light
+            self.loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
+            self.loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
+            self.loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
+            self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + \
+                               self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
 
         metrics = {'loss': self.loss_total}
         return metrics
@@ -417,9 +417,87 @@ class PhyDIR():
             # utils.save_videos(save_dir, canon_im_rotate_grid, suffix='image_video', sep_folder=sep_folder, cycle=True)
             utils.save_videos(save_dir, canon_normal_rotate_grid, suffix='normal_video', sep_folder=sep_folder, cycle=True)
 
-    def save_score(self):
-        pass
+    def save_scores(self, path):
+        # save scores if gt is loaded
+        if self.load_gt_depth:
+            header = 'MAE_masked, \
+                      MSE_masked, \
+                      SIE_masked, \
+                      NorErr_masked'
+            mean = self.all_scores.mean(0)
+            std = self.all_scores.std(0)
+            header = header + '\nMean: ' + ',\t'.join(['%.8f'%x for x in mean])
+            header = header + '\nStd: ' + ',\t'.join(['%.8f'%x for x in std])
+            utils.save_scores(path, self.all_scores, header=header)
 
-    def visualize(self):
-        pass
+    def visualize(self, logger, total_iter, max_bs=25):
+        k, c, h, w = self.input_im.shape
+        b0 = min(max_bs, k)
+
+        with torch.no_grad():
+            v0 = torch.FloatTensor([-0.1*math.pi/180*60,0,0,0,0,0]).to(self.input_im.device).repeat(k,1)
+            canon_normal_rotate = self.renderer.render_yaw(self.canon_normal.permute(0,3,1,2), self.canon_depth, v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
+            canon_normal_rotate = canon_normal_rotate.clamp(-1,1).detach().cpu() /2+0.5
+
+        input_im = self.input_im.detach().cpu().numpy() /2+0.5
+        recon_im = self.recon_im.clamp(-1,1).detach().cpu().numpy() /2+0.5
+        canon_depth = ((self.canon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+        canon_depth_raw_hist = self.canon_depth_raw.detach().unsqueeze(1).cpu()
+        canon_depth_raw = self.canon_depth_raw[:b0].detach().unsqueeze(1).cpu() / 2. + 0.5
+        recon_depth = ((self.recon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+        canon_diffuse_shading = self.canon_diffuse_shading.detach().cpu().numpy()
+        canon_normal = self.canon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+        recon_normal = self.recon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5
+        im_tex = self.canon_im_tex.detach().cpu().numpy() /2+0.5
+        recon_im_tex = self.recon_im_tex.clamp(-1,1).detach().cpu().numpy() /2+0.5
+
+
+        if self.use_conf_map:
+            conf_map_l1 = 1/(1+self.conf_sigma_l1.detach().cpu().numpy()+EPS)
+        canon_light = torch.cat([self.canon_light_a, self.canon_light_b, self.canon_light_d], 1).detach().cpu().numpy()
+        view = self.view.detach().cpu().numpy()
+
+        canon_normal_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(k**0.5))) for img in torch.unbind(canon_normal_rotate,1)]  # [(C,H,W)]*T
+        canon_normal_rotate_grid = torch.stack(canon_normal_rotate_grid, 0).unsqueeze(0).numpy()  # (1,T,C,H,W)
+
+        ## write summary
+        logger.add_scalar('Loss/loss_total', self.loss_total, total_iter)
+        logger.add_scalar('Loss/loss_recon', self.loss_recon, total_iter)
+        logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
+        logger.add_scalar('Loss/loss_shape', self.loss_shape, total_iter)
+        logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
+        # logger.add_scalar('Loss/loss_adv', self.loss_adv, total_iter)
+
+        logger.add_histogram('Depth/canon_depth_raw_hist', canon_depth_raw_hist, total_iter)
+        vlist = ['view_rx', 'view_ry', 'view_rz', 'view_tx', 'view_ty', 'view_tz']
+        for i in range(self.view.shape[1]):
+            logger.add_histogram('View/' + vlist[i], self.view[:, i], total_iter)
+        logger.add_histogram('Light/canon_light_a', self.canon_light_a, total_iter)
+        logger.add_histogram('Light/canon_light_b', self.canon_light_b, total_iter)
+        llist = ['canon_light_dx', 'canon_light_dy', 'canon_light_dz']
+        for i in range(self.canon_light_d.shape[1]):
+            logger.add_histogram('Light/' + llist[i], self.canon_light_d[:, i], total_iter)
+
+        def log_grid_image(label, im, nrow=int(math.ceil(b0 ** 0.5)), iter=total_iter):
+            im_grid = torchvision.utils.make_grid(im, nrow=nrow)
+            logger.add_image(label, im_grid, iter)
+
+        log_grid_image('Image/input_image_symline', input_im)
+        log_grid_image('Image/recon_image', recon_im)
+
+        log_grid_image('Depth/canonical_depth_raw', canon_depth_raw)
+        log_grid_image('Depth/canonical_depth', canon_depth)
+        log_grid_image('Depth/recon_depth', recon_depth)
+        log_grid_image('Depth/canonical_diffuse_shading', canon_diffuse_shading)
+        log_grid_image('Depth/canonical_normal', canon_normal)
+        log_grid_image('Depth/recon_normal', recon_normal)
+
+        logger.add_histogram('Image/canonical_diffuse_shading_hist', canon_diffuse_shading, total_iter)
+
+        if self.use_conf_map:
+            log_grid_image('Conf/conf_map_l1', conf_map_l1)
+            logger.add_histogram('Conf/conf_sigma_l1_hist', self.conf_sigma_l1, total_iter)
+
+        logger.add_video('Image_rotate/canon_normal_rotate', canon_normal_rotate_grid, total_iter, fps=4)
+
 
