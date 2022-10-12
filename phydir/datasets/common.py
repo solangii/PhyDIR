@@ -12,7 +12,7 @@ def is_image_file(filename):
     return filename.lower().endswith(IMG_EXTENSIONS)
 
 
-def make_dataset(dir):
+def make_dataset(dir, prev_idx):
     assert os.path.isdir(dir), '%s is not a valid directory' % dir
     images = {}
     for root, _, fnames in sorted(os.walk(os.path.join(dir, 'datalist'))):
@@ -20,7 +20,7 @@ def make_dataset(dir):
         if os.path.isfile(jfile):
             with open(jfile, 'r') as f:
                 jdata = json.load(f)
-            idx = 0
+            idx = prev_idx
             for k, v in jdata.items():
                 if len(v) >= 6:
                     images[idx] = v
@@ -29,11 +29,11 @@ def make_dataset(dir):
 
 
 class ImageDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, image_size=256, crop=None, is_validation=False, K=None):
+    def __init__(self, data_dir, image_size=256, crop=None, is_validation=False, K=None, idx=None):
         super(ImageDataset, self).__init__()
         self.root = data_dir
         self.image_size = image_size
-        self.ids = make_dataset(data_dir) # {subject: [fpath, ...]}
+        self.ids = make_dataset(data_dir, idx) # {subject: [fpath, ...]}
         self.size = len(self.ids)
         self.crop = crop
         self.is_validation = is_validation

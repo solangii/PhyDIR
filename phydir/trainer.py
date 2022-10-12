@@ -1,6 +1,5 @@
 import os
 import glob
-from datetime import datetime
 import numpy as np
 import torch
 from . import meters
@@ -16,7 +15,7 @@ class Trainer():
         self.save_checkpoint_freq = cfgs.get('save_checkpoint_freq', 1)
         self.keep_num_checkpoint = cfgs.get('keep_num_checkpoint', 2)  # -1 for keeping all checkpoints
         self.resume = cfgs.get('resume', True)
-        self.use_logger = cfgs.get('use_logger', True) #todo add logger
+        self.use_logger = cfgs.get('use_logger', True)
         self.log_freq = cfgs.get('log_freq', 1000)
         self.archive_code = cfgs.get('archive_code', True)
         self.checkpoint_dir = cfgs.get('checkpoint_dir', None)
@@ -129,9 +128,12 @@ class Trainer():
         ## initialize tensorboardX logger
         if self.use_logger:
             from tensorboardX import SummaryWriter
-            self.logger = SummaryWriter(
-                os.path.join(self.result_dir, 'logs', datetime.now().strftime("%Y%m%d-%H%M%S")))
+            from datetime import datetime, timezone, timedelta
 
+            kst = timezone(timedelta(hours=9))
+            self.logger = SummaryWriter(
+                os.path.join(self.result_dir, 'logs', datetime.now(kst).strftime("%Y%m%d-%H%M%S"))) #timezone
+            print(f"Saving logs to {self.logger.logdir}")
             ## cache one batch for visualization
             self.viz_input = self.val_loader.__iter__().__next__()
 
