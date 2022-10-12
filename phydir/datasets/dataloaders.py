@@ -30,13 +30,20 @@ def get_data_loaders(cfgs):
 
     return train_loader, val_loader, test_loader
 
+def get_ids(data_list):
+    idx = 0
+    for dataset in data_list:
+        idx += len(dataset.ids.keys())
+    return idx
+
 def get_dataset(data_dir, training_data, partition='train', image_size=256, crop=None, K=None, is_validation=False):
     data_list = []
     for dataset in training_data:
         dataset_dir = os.path.join(data_dir, dataset, partition)
         assert os.path.isdir(dataset_dir), "Training data directory does not exist: %s" %dataset_dir
         print(f"Loading {partition} data from {dataset_dir}")
-        dataset = ImageDataset(dataset_dir, image_size=image_size, crop=crop, is_validation=is_validation, K=K)
+        idx = get_ids(data_list)
+        dataset = ImageDataset(dataset_dir, image_size=image_size, crop=crop, is_validation=is_validation, K=K, idx=idx)
         data_list.append(dataset)
 
     return data_list
