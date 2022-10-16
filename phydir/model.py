@@ -3,10 +3,12 @@ import math
 import glob
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from .models import EDDeconv, Encoder, UNet, ConvLayer, ConfNet
 from . import utils
 from .renderer import Renderer
+from .models.stylegan2 import Discriminator
 
 EPS = 1e-7
 
@@ -34,6 +36,8 @@ class PhyDIR():
         self.lr = cfgs.get('lr', 1e-4)
         self.K = cfgs.get('K', None)
         self.renderer = Renderer(cfgs)
+        self.discriminator_loss = DiscriminatorLoss().to(self.device)
+        self.generator_loss = GeneratorLoss().to(self.device)
 
         ## networks and optimizers
         self.netD = EDDeconv(cin=3, cout=1, nf=256, zdim=512, activation=None)
@@ -41,7 +45,7 @@ class PhyDIR():
         self.netV = Encoder(cin=3, cout=6, nf=32)
         self.netT = UNet(n_channels=3, n_classes=32)
         self.netN = UNet(n_channels=32, n_classes=3)
-        # self.netDis = Discriminator(size=512)
+        self.discriminator = Discriminator(int(math.log2(self.image_size)), n_features = 512, max_features = 512).to(self.device)
         self.netT_conv = ConvLayer(cin=32, cout=32)
         self.netF_conv = ConvLayer(cin=32, cout=32)
         if self.use_conf_map:
@@ -51,8 +55,6 @@ class PhyDIR():
         self.make_optimizer = lambda model: torch.optim.Adam(
             filter(lambda p: p.requires_grad, model.parameters()),
             lr=self.lr, betas=(0.9, 0.999))
-
-        ## other parameters
 
         ## depth rescaler: -1~1 -> min_depth~max_depth
         self.depth_rescaler = lambda d : (1+d)/2 *self.max_depth + (1-d)/2 *self.min_depth
@@ -64,7 +66,7 @@ class PhyDIR():
                        2: ['netC', 'netD', 'netL', 'netV'],
                        3: ['netC', 'netD', 'netL', 'netV', 'netT', 'netN', 'netT_conv', 'netF_conv']}
         freeze_nets = {1: ['netD', 'netL', 'netV'],
-                       2: ['netT', 'netN', 'netT_conv', 'netF_conv'],
+                       2: ['netT', 'netN', 'netT_conv', 'netF_conv', 'Discriminator'],
                        3: []}
         self.set_requires_grad(freeze_nets[stage], requires_grad=False)
         self.set_requires_grad(target_nets[stage], requires_grad=True)
@@ -75,6 +77,10 @@ class PhyDIR():
             optim_name = net_name.replace('net','optimizer')
             setattr(self, optim_name, optimizer)
             self.optimizer_names += [optim_name]
+
+        if stage is not 2:
+            self.optimizer_discriminator = self.make_optimizer(self.discriminator)
+
 
     def set_requires_grad(self, net_names, requires_grad=True):
         for net_name in net_names:
@@ -115,12 +121,6 @@ class PhyDIR():
         for net_name in self.network_names:
             getattr(self, net_name).eval()
 
-    def adversarial_loss(self, pred, target):
-        if target:
-            return -torch.mean(torch.log(pred + EPS))
-        else:
-            return -torch.mean(torch.log(1 - pred + EPS))
-
     def photometric_loss(self, im1, im2, mask=None, conf_sigma=None):
         loss = (im1-im2).abs()
         if conf_sigma is not None:
@@ -139,7 +139,12 @@ class PhyDIR():
         for optim_name in self.optimizer_names:
             getattr(self, optim_name).step()
 
-    def forward(self, batch):
+    def update_D(self):
+        self.optimizer_discriminator.zero_grad()
+        self.loss_d.backward()
+        self.optimizer_discriminator.step()
+
+    def forward(self, batch, mode=None):
         # [data, data, data, ...., data]
         self.loss_total = 0
         if self.K is None:
@@ -274,7 +279,6 @@ class PhyDIR():
             # grid sampling
             self.renderer.set_transform_matrices(self.view)
             self.recon_depth = self.renderer.warp_canon_depth(self.canon_depth)
-            self.recon_normal = self.renderer.get_normal_from_depth(self.recon_depth)
 
             grid_2d_from_canon = self.renderer.get_inv_warped_2d_grid(self.recon_depth)
             self.recon_im_tex = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon, mode='bilinear').unsqueeze(0)
@@ -286,39 +290,48 @@ class PhyDIR():
 
             ## Neural Appearance Renderer
             self.recon_im = self.netN(self.fused_im_tex)
+            if mode == 'discriminator':
+                generated_im = self.recon_im
+                fake_output = self.discriminator(generated_im.detach())
+                real_output = self.discriminator(self.input_im)
 
-            ## predict confidence map
-            if self.use_conf_map:
-                self.conf_sigma_l1 = self.netC(self.input_im)  # B*kx1xHxW
+                # get discriminator loss
+                real_loss, fake_loss = self.discriminator_loss(real_output, fake_output)
+                self.loss_d = (real_loss + fake_loss) * self.lam_adv
             else:
-                self.conf_sigma_l1 = None
+                ## predict confidence map
+                if self.use_conf_map:
+                    self.conf_sigma_l1 = self.netC(self.input_im)  # B*kx1xHxW
+                else:
+                    self.conf_sigma_l1 = None
 
-            ## rotated image (not sure..)
-            random_view = torch.rand(1, 6).to(self.input_im.device)
-            random_view = torch.cat([
-                random_view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
-                random_view[:, 3:5] * self.xy_translation_range,
-                random_view[:, 5:] * self.z_translation_range], 1)  # Bx6
-            self.renderer.set_transform_matrices(random_view)
-            self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
-            grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
-            self.recon_im_tex_rotate = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon_rotate,
-                                                            mode='bilinear').unsqueeze(0)
-            self.recon_cannon_im_tex_rotate = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon_rotate,
-                                                                   mode='bilinear').unsqueeze(0)
+                ## rotated image (not sure..)
+                random_view = torch.rand(1, 6).to(self.input_im.device)
+                random_view = torch.cat([
+                    random_view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
+                    random_view[:, 3:5] * self.xy_translation_range,
+                    random_view[:, 5:] * self.z_translation_range], 1)  # Bx6
+                self.renderer.set_transform_matrices(random_view)
+                self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
+                grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
+                self.recon_im_tex_rotate = nn.functional.grid_sample(shaded_texture, grid_2d_from_canon_rotate,
+                                                                mode='bilinear').unsqueeze(0)
+                self.recon_cannon_im_tex_rotate = nn.functional.grid_sample(shaded_cannon_texture, grid_2d_from_canon_rotate,
+                                                                       mode='bilinear').unsqueeze(0)
 
-            self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_cannon_im_tex_rotate]).mean(0)
-            self.fused_im_tex_rotate = self.netF_conv(self.fused_im_tex_rotate)
-            self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
+                self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_cannon_im_tex_rotate]).mean(0)
+                self.fused_im_tex_rotate = self.netF_conv(self.fused_im_tex_rotate)
+                self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
 
-            ## loss function
-            self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
-            # self.loss_adv =
-            self.loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
-            self.loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
-            self.loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
-            self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + \
-                               self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
+                ## loss function
+                self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
+                self.loss_g = self.generator_loss(self.recon_im)
+                self.loss_adv = self.loss_g + self.loss_d
+                self.loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
+                self.loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
+                self.loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
+                self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + self.lam_adv * self.loss_g \
+                                   + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
 
         metrics = {'loss': self.loss_total}
         return metrics
@@ -500,4 +513,43 @@ class PhyDIR():
 
         logger.add_video('Image_rotate/canon_normal_rotate', canon_normal_rotate_grid, total_iter, fps=4)
 
+
+class DiscriminatorLoss(nn.Module):
+    """
+    ## Discriminator Loss
+    We want to find $w$ to maximize
+    $$\mathbb{E}_{x \sim \mathbb{P}_r} [f_w(x)]- \mathbb{E}_{z \sim p(z)} [f_w(g_\theta(z))]$$,
+    so we minimize,
+    $$-\frac{1}{m} \sum_{i=1}^m f_w \big(x^{(i)} \big) +
+     \frac{1}{m} \sum_{i=1}^m f_w \big( g_\theta(z^{(i)}) \big)$$
+    """
+
+    def forward(self, f_real: torch.Tensor, f_fake: torch.Tensor):
+        """
+        * `f_real` is $f_w(x)$
+        * `f_fake` is $f_w(g_\theta(z))$
+        This returns the a tuple with losses for $f_w(x)$ and $f_w(g_\theta(z))$,
+        which are later added.
+        They are kept separate for logging.
+        """
+
+        # We use ReLUs to clip the loss to keep $f \in [-1, +1]$ range.
+        return F.relu(1 - f_real).mean(), F.relu(1 + f_fake).mean()
+
+
+class GeneratorLoss(nn.Module):
+    """
+    ## Generator Loss
+    We want to find $\theta$ to minimize
+    $$\mathbb{E}_{x \sim \mathbb{P}_r} [f_w(x)]- \mathbb{E}_{z \sim p(z)} [f_w(g_\theta(z))]$$
+    The first component is independent of $\theta$,
+    so we minimize,
+    $$-\frac{1}{m} \sum_{i=1}^m f_w \big( g_\theta(z^{(i)}) \big)$$
+    """
+
+    def forward(self, f_fake: torch.Tensor):
+        """
+        * `f_fake` is $f_w(g_\theta(z))$
+        """
+        return -f_fake.mean()
 
