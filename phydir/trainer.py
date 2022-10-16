@@ -120,10 +120,10 @@ class Trainer():
         ## load weights from previous stage
         if self.pretrain_dir is not None:
             start_epoch = self.load_checkpoint(optim=False, metrics=False, pretrain_dir=self.pretrain_dir)
-
-        ## resume from checkpoint
-        if self.resume:
-            start_epoch = self.load_checkpoint(optim=True)
+        else:
+            ## resume from checkpoint
+            if self.resume:
+                start_epoch = self.load_checkpoint(optim=True)
 
         ## initialize tensorboardX logger
         if self.use_logger:

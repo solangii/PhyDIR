@@ -22,7 +22,7 @@ data_root: data/
 
 ## model
 exp_name: train_celeba # exp_name
-lr: 1e-4
+lr: 0.0001
 lam_adv: 0.5
 lam_shape: 0.1
 lam_tex: 0.3
