@@ -167,13 +167,17 @@ class Trainer():
             self.model.set_eval()
 
         for iter, input in enumerate(loader):
+            # discriminator update
+            _ = self.model.forward(input, mode='discriminator')
+            if self.stage is not 2:
+                self.model.update_D() # update discriminator
             m = self.model.forward(input)
             if is_train:
                 self.model.backward()
             elif is_test:
                 if iter<10:
                     self.model.save_results(self.test_result_dir)
-
+            m['loss'] += self.model.loss_d * self.model.lam_adv
             metrics.update(m, self.batch_size)
             print(f"{'T' if is_train else 'V'}{epoch:02}/{iter:05}/{metrics}")
 
