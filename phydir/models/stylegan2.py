@@ -966,7 +966,8 @@ class PathLengthPenalty(nn.Module):
 
 
 if __name__ == '__main__':
-    netD = Discriminator(log_resolution=256, n_features = 512, max_features = 512)
-    input = torch.randn(1, 3, 256, 256)
+    log_resolution = int(math.log2(256))
+    netD = Discriminator(log_resolution=log_resolution, n_features = 512, max_features = 512).to('cuda')
+    input = torch.randn(4, 3, 256, 256).to('cuda')
     output = netD(input)
     print(output.shape)
