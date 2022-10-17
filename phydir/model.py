@@ -325,7 +325,7 @@ class PhyDIR():
 
                 ## loss function
                 self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
-                self.loss_g = self.generator_loss(self.recon_im)
+                self.loss_g = self.generator_loss(self.discriminator(self.recon_im))
                 self.loss_adv = self.loss_g + self.loss_d
                 self.loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
                 self.loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
