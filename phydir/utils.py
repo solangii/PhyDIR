@@ -182,10 +182,9 @@ def save_scores(out_path, scores, header=''):
 
 def get_latest_checkpoint(out_dir, prefix='checkpoint', ext='.pth'):
     """Get the latest checkpoint in the output directory."""
-    ckpts = glob.glob(os.path.join(out_dir, prefix+'*'+ext))
+    ckpts = sorted(glob.glob(os.path.join(out_dir, prefix+'*'+ext)))
     if len(ckpts) == 0:
         return None
-    ckpts = sorted(ckpts, key=lambda x: int(x.split('_')[-1].split('.')[0]))
     return ckpts[-1]
 
 def get_ckpt(out_dir, ext='.pth'):

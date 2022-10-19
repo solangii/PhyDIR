@@ -36,13 +36,13 @@ class Trainer():
         """Set result_dir based on model name"""
         if self.result_dir is None:
             self.result_dir = os.path.join('results', self.model.exp_name, f'stage{self.stage}')
+        print(f"Saving results to {self.result_dir}")
 
     def load_checkpoint(self, optim=True, metrics=True, epoch=True):
         """Search the specified/latest checkpoint in checkpoint_dir and load the model and optimizer."""
         checkpoint_name = self.get_checkpoint_name(self.pretrain_dir, self.checkpoint_dir, self.resume)
         if checkpoint_name is None:
             return 0 # from scratch
-        checkpoint_name = os.path.basename(checkpoint_name)
         print(f"Loading checkpoint from {checkpoint_name}")
 
         cp = torch.load(checkpoint_name, map_location=self.device)
@@ -114,7 +114,6 @@ class Trainer():
         utils.dump_yaml(os.path.join(self.result_dir, 'configs.yml'), self.cfgs)
 
         ## initialize
-        start_epoch = 0
         self.metrics_trace.reset()
         self.train_iter_per_epoch = len(self.train_loader)
         self.model.to_device(self.device)
