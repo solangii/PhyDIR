@@ -178,3 +178,25 @@ def compute_angular_distance(n1, n2, mask=None):
 def save_scores(out_path, scores, header=''):
     print('Saving scores to %s' %out_path)
     np.savetxt(out_path, scores, fmt='%.8f', delimiter=',\t', header=header)
+
+
+def get_latest_checkpoint(out_dir, prefix='checkpoint', ext='.pth'):
+    """Get the latest checkpoint in the output directory."""
+    ckpts = sorted(glob.glob(os.path.join(out_dir, prefix+'*'+ext)))
+    if len(ckpts) == 0:
+        return None
+    return ckpts[-1]
+
+def get_ckpt(out_dir, ext='.pth'):
+    if out_dir is None:
+        return None
+
+    if out_dir.endswith(ext):
+        if not os.path.exists(out_dir):
+            raise ValueError('Checkpoint %s does not exist' %out_dir)
+        return out_dir
+    else:
+        ckpt = get_latest_checkpoint(out_dir, ext=ext)
+        if ckpt is None:
+            raise ValueError('No checkpoint found in %s' %out_dir)
+        return ckpt

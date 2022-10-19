@@ -6,7 +6,6 @@ from . import meters
 from . import utils
 from .datasets.dataloaders import get_data_loaders
 
-
 class Trainer():
     def __init__(self, cfgs, model):
         self.device = cfgs.get('device', 'cpu')
@@ -31,43 +30,47 @@ class Trainer():
         self.model = model(cfgs)
         self.model.trainer = self
         self.train_loader, self.val_loader, self.test_loader = get_data_loaders(cfgs)
-        self.set_result_ckpt_dir()
+        self.set_result_dir()
 
-
-    def set_result_ckpt_dir(self):
-        """Set result_dir, checkpoint_dir based on model name"""
+    def set_result_dir(self):
+        """Set result_dir based on model name"""
         if self.result_dir is None:
             self.result_dir = os.path.join('results', self.model.exp_name, f'stage{self.stage}')
-        if self.checkpoint_dir is None: # for resume
-            self.checkpoint_dir = self.result_dir
+        print(f"Saving results to {self.result_dir}")
 
-
-    def load_checkpoint(self, optim=True, metrics=True, epoch=True, pretrain_dir=None):
+    def load_checkpoint(self, optim=True, metrics=True, epoch=True):
         """Search the specified/latest checkpoint in checkpoint_dir and load the model and optimizer."""
-        if pretrain_dir is None:
-            if self.checkpoint_name is not None:
-                checkpoint_path = os.path.join(self.checkpoint_dir, self.checkpoint_name)
-            else:
-                checkpoints = sorted(glob.glob(os.path.join(self.checkpoint_dir, '*.pth')))
-                if len(checkpoints) == 0:
-                    return 0
-                checkpoint_path = checkpoints[-1]
-                self.checkpoint_name = os.path.basename(checkpoint_path)
-        else:
-            checkpoints = sorted(glob.glob(os.path.join(pretrain_dir, '*.pth'))) # pretrain_dir = 'results/[exp_name]/[prev_stage]'
-            if len(checkpoints) == 0:
-                raise ValueError(f"No checkpoint found in {pretrain_dir}")
-            checkpoint_path = checkpoints[-1]
-            self.checkpoint_name = os.path.basename(checkpoint_path)
-        print(f"Loading checkpoint from {checkpoint_path}")
-        cp = torch.load(checkpoint_path, map_location=self.device)
+        checkpoint_name = self.get_checkpoint_name(self.pretrain_dir, self.checkpoint_dir, self.resume)
+        if checkpoint_name is None:
+            return 0 # from scratch
+        print(f"Loading checkpoint from {checkpoint_name}")
+
+        cp = torch.load(checkpoint_name, map_location=self.device)
         self.model.load_model_state(cp)
-        if optim:
-            self.model.load_optimizer_state(cp)
-        if metrics:
-            self.metrics_trace = cp['metrics_trace']
-        epoch = cp['epoch'] if epoch else 0
+        if self.pretrain_dir is None:
+            if optim:
+                self.model.load_optimizer_state(cp)
+            if metrics:
+                self.metrics_trace = cp['metrics_trace']
+            if epoch:
+                epoch = cp['epoch']
+        else:
+            epoch = 0
         return epoch
+
+    def get_checkpoint_name(self, pretrain_dir=None, checkpoint_dir=None, resume=False):
+        if pretrain_dir is not None:
+            checkpoint_path = utils.get_ckpt(pretrain_dir, ext='pth')
+        elif checkpoint_dir is not None:
+            checkpoint_path = utils.get_ckpt(checkpoint_dir, ext='pth')
+        elif resume:
+            checkpoint_path = utils.get_latest_checkpoint(self.result_dir, ext='pth')
+            if checkpoint_path is None and self.stage > 1:
+                self.checkpoint_dir = self.result_dir.split('stage')[0] + f'stage{self.stage - 1}'
+                checkpoint_path = utils.get_latest_checkpoint(self.checkpoint_dir, ext='pth')
+        else:
+            checkpoint_path = None
+        return checkpoint_path
 
     def save_checkpoint(self, epoch, optim=True):
         """Save model, optimizer, and metrics state to a checkpoint in checkpoint_dir for the specified epoch."""
@@ -93,7 +96,7 @@ class Trainer():
         self.model.to_device(self.device)
         self.current_epoch = self.load_checkpoint(optim=False)
         if self.test_result_dir is None:
-            self.test_result_dir = os.path.join(self.checkpoint_dir,
+            self.test_result_dir = os.path.join(self.result_dir,
                                                 f'test_results_{self.checkpoint_name}'.replace('.pth', ''))
         print(f"Saving testing results to {self.test_result_dir}")
 
@@ -111,19 +114,13 @@ class Trainer():
         utils.dump_yaml(os.path.join(self.result_dir, 'configs.yml'), self.cfgs)
 
         ## initialize
-        start_epoch = 0
         self.metrics_trace.reset()
         self.train_iter_per_epoch = len(self.train_loader)
         self.model.to_device(self.device)
         self.model.init_optimizers(self.stage)
 
-        ## load weights from previous stage
-        if self.pretrain_dir is not None:
-            start_epoch = self.load_checkpoint(optim=False, metrics=False, pretrain_dir=self.pretrain_dir)
-        else:
-            ## resume from checkpoint
-            if self.resume:
-                start_epoch = self.load_checkpoint(optim=True)
+        ## load ckpt
+        start_epoch = self.load_checkpoint(optim=True, metrics=True, epoch=True)
 
         ## initialize tensorboardX logger
         if self.use_logger:
