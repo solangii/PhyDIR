@@ -48,7 +48,7 @@ class PhyDIR():
         self.netN = UNet(n_channels=self.tex_channels, n_classes=3)
         self.discriminator = Discriminator(int(math.log2(self.image_size)), n_features = 512, max_features = 512).to(self.device)
         self.netT_conv = ConvLayer(cin=self.tex_channels, cout=self.tex_channels)
-        self.netF_conv = ConvLayer(cin=self.tex_channels, cout=self.tex_channels)
+        self.netF_conv = ConvLayer(cin=self.tex_channels * 2, cout=self.tex_channels)
         if self.use_conf_map:
             self.netC = ConfNet(cin=3, cout=2, nf=64, zdim=128) # 3, 1, 256, 512
 
@@ -298,7 +298,7 @@ class PhyDIR():
             self.recon_canon_im_tex = nn.functional.grid_sample(self.shaded_canon_texture, grid_2d_from_canon,
                                                             mode='bilinear').unsqueeze(0)
 
-            self.fused_im_tex = torch.cat([self.recon_im_tex, self.recon_canon_im_tex]).mean(0)
+            self.fused_im_tex = torch.cat([self.recon_im_tex, self.recon_canon_im_tex], dim=2).squeeze(0)
             self.fused_im_tex = self.netF_conv(self.fused_im_tex)
 
             ## Neural Appearance Renderer
@@ -341,7 +341,7 @@ class PhyDIR():
                 self.recon_canon_im_tex_rotate = nn.functional.grid_sample(self.shaded_canon_texture, grid_2d_from_canon_rotate,
                                                                        mode='bilinear').unsqueeze(0)
 
-                self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_canon_im_tex_rotate]).mean(0)
+                self.fused_im_tex_rotate = torch.cat([self.recon_im_tex_rotate, self.recon_canon_im_tex_rotate], dim=2).squeeze(0)
                 self.fused_im_tex_rotate = self.netF_conv(self.fused_im_tex_rotate)
                 self.recon_im_rotate = self.netN(self.fused_im_tex_rotate)
                 recon_im_mask_rotate = (
@@ -353,9 +353,9 @@ class PhyDIR():
                 self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, mask=recon_im_mask)
                 # self.loss_g = self.generator_loss(self.discriminator(self.recon_im))
                 # self.loss_adv = self.loss_g + self.loss_d
-                self.loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
-                self.loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
-                self.loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
+                self.loss_tex = (self.netT(self.recon_im_rotate.detach()) - self.netT(self.input_im)).abs().mean()
+                self.loss_shape = (self.netD(self.recon_im_rotate.detach()) - self.netD(self.input_im)).abs().mean()
+                self.loss_light = (self.netL(self.recon_im_rotate.detach()) - self.netL(self.input_im)).abs().mean()
                 # self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + self.lam_adv * self.loss_g \
                 #                    + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
                 self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape \
