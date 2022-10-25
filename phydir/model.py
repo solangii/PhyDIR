@@ -518,13 +518,20 @@ class PhyDIR():
 
         recon_depth_rotate = ((self.recon_depth_rotate -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1)
 
-        im_tex = self.im_tex[:, :3, :, :].detach().cpu() /2+0.5
-        canon_im_tex = self.canon_im_tex[:, :3, :, :].detach().cpu() /2+0.5
-        shaded_texture = self.shaded_texture[:, :3, :, :].detach().cpu() /2+0.5
-        shaded_canon_texture = self.shaded_canon_texture[:, :3, :, :].detach().cpu() /2+0.5
-        recon_im_tex = self.recon_im_tex.squeeze(0)[:, :3, :, :].clamp(-1,1).detach().cpu() /2+0.5
-        recon_canon_im_tex = self.recon_canon_im_tex.squeeze(0)[:, :3, :, :].clamp(-1,1).detach().cpu() /2+0.5
-        fused_im_tex = self.fused_im_tex.squeeze(0)[:, :3, :, :].clamp(-1,1).detach().cpu() /2+0.5
+        def texture_viz(x):
+            from .utils import pca, tsne
+            x = x.permute(0,2,3,1).contiguous().view(-1, self.tex_channels) # (BHW,C)
+            x = pca(x, 3) # (BHW,3)
+            x = x.view(-1, h, w, 3).permute(0,3,1,2) # (B,3,H,W)
+            return x
+
+        im_tex = texture_viz(self.im_tex.detach().cpu() /2+0.5)
+        canon_im_tex = texture_viz(self.canon_im_tex.detach().cpu() /2+0.5)
+        shaded_texture = texture_viz(self.shaded_texture.detach().cpu() /2+0.5)
+        shaded_canon_texture = texture_viz(self.shaded_canon_texture.detach().cpu() /2+0.5)
+        recon_im_tex = texture_viz(self.recon_im_tex.squeeze(0).clamp(-1,1).detach().cpu() /2+0.5)
+        recon_canon_im_tex = texture_viz(self.recon_canon_im_tex.squeeze(0).clamp(-1,1).detach().cpu() /2+0.5)
+        fused_im_tex = texture_viz(self.fused_im_tex.squeeze(0).clamp(-1,1).detach().cpu() /2+0.5)
 
         if self.use_conf_map:
             conf_map_l1 = 1/(1+self.conf_sigma_l1.detach().cpu()+EPS)
