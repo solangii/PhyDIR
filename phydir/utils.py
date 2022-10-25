@@ -7,7 +7,8 @@ import numpy as np
 import cv2
 import torch
 import zipfile
-
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 def setup_runtime(args):
     """Load configs, initialize CUDA, CuDNN and the random seeds."""
@@ -200,3 +201,39 @@ def get_ckpt(out_dir, ext='.pth'):
         if ckpt is None:
             raise ValueError('No checkpoint found in %s' %out_dir)
         return ckpt
+
+def pca(data, n_components=3):
+    """Perform PCA on the data.
+
+    Args:
+        data (torch.Tensor): Input data.
+        n_components (int): Number of components to keep.
+
+    Returns:
+        torch.Tensor: PCA-transformed data.
+    """
+
+    data = data.numpy()
+    pca = PCA(n_components=n_components)
+    pca.fit(data)
+    data = pca.transform(data)
+    data = torch.from_numpy(data)
+    return data
+
+def tsne(data, n_components=3):
+    """Perform t-SNE on the data.
+
+    Args:
+        data (torch.Tensor): Input data.
+        n_components (int): Number of components to keep.
+
+    Returns:
+        torch.Tensor: t-SNE-transformed data.
+    """
+
+    data = data.numpy()
+    tsne = TSNE(n_components=n_components)
+    tsne.fit(data)
+    data = tsne.transform(data)
+    data = torch.from_numpy(data)
+    return data
