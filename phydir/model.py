@@ -257,18 +257,19 @@ class PhyDIR():
             depth_border = torch.zeros(1, h, w - 4).to(self.input_im.device)
             depth_border = nn.functional.pad(depth_border, (2, 2), mode='constant', value=1)
             self.canon_depth = self.canon_depth * (1 - depth_border) + depth_border * self.border_depth
+            self.canon_depth = torch.cat([self.canon_depth, self.canon_depth.flip(2)], 0)  # flip
 
             # 2. predict light
-            canon_light = self.netL(self.input_im)  # b*k x4
+            canon_light = self.netL(self.input_im).repeat(2,1)   # b*k x4
             self.canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, b*kx1
             self.canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, b*kx1
             canon_light_dxy = canon_light[:, 2:]
-            self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k, 1).to(self.input_im.device)], 1)
+            self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k*2, 1).to(self.input_im.device)], 1)
             self.canon_light_d = self.canon_light_d / (
                 (self.canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
 
             # 3. predict viewpoint
-            self.view = self.netV(self.input_im)
+            self.view = self.netV(self.input_im).repeat(2,1)
             self.view = torch.cat([
                 self.view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
                 self.view[:, 3:5] * self.xy_translation_range,
@@ -278,6 +279,8 @@ class PhyDIR():
             self.im_tex = self.netT(self.input_im)  # b*kx32xHxW
             self.canon_im_tex = self.im_tex.view(b, k, self.tex_channels, h, w).mean(1)  # bx32xHxW
             self.canon_im_tex = self.netT_conv(self.canon_im_tex).repeat_interleave(k, dim=0)  # b*kx32xHxW
+            self.im_tex = torch.cat([self.im_tex, self.im_tex.flip(3)], 0)  # flip
+            self.canon_im_tex = torch.cat([self.canon_im_tex, self.canon_im_tex.flip(3)], 0)  # flip
 
             ## 3D Physical Process
             # multi-image-shading (shading, texture)
@@ -304,8 +307,8 @@ class PhyDIR():
             ## Neural Appearance Renderer
             self.recon_im = self.netN(self.fused_im_tex)
             margin = (self.max_depth - self.min_depth) / 2
-            recon_im_mask = (
-                        self.recon_depth < self.max_depth + margin).float()  # invalid border pixels have been clamped at max_depth+margin
+            recon_im_mask = (self.recon_depth < self.max_depth + margin).float()  # invalid border pixels have been clamped at max_depth+margin
+
             recon_im_mask = recon_im_mask.unsqueeze(1).detach()
             self.recon_im = self.recon_im * recon_im_mask
 
@@ -321,9 +324,11 @@ class PhyDIR():
             else:
                 ## predict confidence map
                 if self.use_conf_map:
-                    conf_sigma_l1, _ = self.netC(self.input_im)  # B*kx1xHxW
+                    conf_sigma_l1, conf_sigma_percl = self.netC(self.input_im)  # B*kx1xHxW
                     self.conf_sigma_l1 = conf_sigma_l1[:, :1]
-
+                    self.conf_sigma_l1_flip = conf_sigma_l1[:, 1:]
+                    self.conf_sigma_percl = conf_sigma_percl[:, :1]
+                    self.conf_sigma_percl_flip = conf_sigma_percl[:, 1:]
                 else:
                     self.conf_sigma_l1 = None
 
@@ -350,15 +355,20 @@ class PhyDIR():
                 self.recon_im_rotate = self.recon_im_rotate * recon_im_mask_rotate
 
                 ## loss function
-                self.loss_recon = self.photometric_loss(self.recon_im, self.input_im, mask=recon_im_mask)
+                self.loss_recon = self.photometric_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k],
+                                                        conf_sigma=self.conf_sigma_l1)
+                self.loss_recon_flip = self.photometric_loss(self.recon_im[b*k:], self.input_im,
+                                                             mask=recon_im_mask[b*k:],
+                                                             conf_sigma=self.conf_sigma_l1_flip)
+
                 # self.loss_g = self.generator_loss(self.discriminator(self.recon_im))
                 # self.loss_adv = self.loss_g + self.loss_d
-                self.loss_tex = (self.netT(self.recon_im_rotate.detach()) - self.netT(self.input_im)).abs().mean()
-                self.loss_shape = (self.netD(self.recon_im_rotate.detach()) - self.netD(self.input_im)).abs().mean()
-                self.loss_light = (self.netL(self.recon_im_rotate.detach()) - self.netL(self.input_im)).abs().mean()
+                self.loss_tex = (self.netT(self.recon_im_rotate[:b*k].detach()) - self.netT(self.input_im)).abs().mean()
+                self.loss_shape = (self.netD(self.recon_im_rotate[:b*k].detach()) - self.netD(self.input_im)).abs().mean()
+                self.loss_light = (self.netL(self.recon_im_rotate[:b*k].detach()) - self.netL(self.input_im)).abs().mean()
                 # self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + self.lam_adv * self.loss_g \
                 #                    + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
-                self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape \
+                self.loss_total += self.loss_recon + self.loss_recon_flip + self.lam_shape * self.loss_shape \
                                    + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
 
         metrics = {'loss': self.loss_total}
@@ -501,7 +511,7 @@ class PhyDIR():
         with torch.no_grad():
             v0 = torch.FloatTensor([-0.1*math.pi/180*60,0,0,0,0,0]).to(self.input_im.device).repeat(k,1)
             # canon_im_rotate = self.renderer.render_yaw(self.recon_im[:b0], self.canon_depth[:b0], v_before=v0, maxr=90).detach().cpu() /2.+0.5  # (B,T,C,H,W)
-            canon_normal_rotate = self.renderer.render_yaw(self.canon_normal.permute(0,3,1,2), self.canon_depth, v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
+            canon_normal_rotate = self.renderer.render_yaw(self.canon_normal[:k].permute(0,3,1,2), self.canon_depth[:k], v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
             canon_normal_rotate = canon_normal_rotate.clamp(-1,1).detach().cpu() /2+0.5
 
         input_im = self.input_im.detach().cpu() /2+0.5
@@ -510,7 +520,7 @@ class PhyDIR():
 
         canon_depth = ((self.canon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1)
         # canon_depth_raw_hist = self.canon_depth_raw.detach().unsqueeze(1).cpu()
-        canon_depth_raw = self.canon_depth_raw[:b0].detach().unsqueeze(1).cpu() / 2. + 0.5
+        canon_depth_raw = self.canon_depth_raw.detach().unsqueeze(1).cpu() / 2. + 0.5
         recon_depth = ((self.recon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1)
         canon_diffuse_shading = self.canon_diffuse_shading.detach().cpu()
         canon_normal = self.canon_normal.permute(0,3,1,2).detach().cpu() /2+0.5
@@ -545,6 +555,7 @@ class PhyDIR():
         ## write summary
         logger.add_scalar('Loss/loss_total', self.loss_total, total_iter)
         logger.add_scalar('Loss/loss_recon', self.loss_recon, total_iter)
+        logger.add_scalar('Loss/loss_recon_flip', self.loss_recon_flip, total_iter)
         logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
         logger.add_scalar('Loss/loss_shape', self.loss_shape, total_iter)
         logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
@@ -567,25 +578,25 @@ class PhyDIR():
             logger.add_image(label, im_grid, iter)
 
         log_grid_image('Image/input_image', input_im)
-        log_grid_image('Image/recon_image', recon_im)
-        log_grid_image('Image/recon_image_rotate', recon_im_rotate)
+        log_grid_image('Image/recon_image', recon_im[:b0])
+        log_grid_image('Image/recon_image_rotate', recon_im_rotate[:b0])
         # log_grid_image('Image/recon_side', canon_im_rotate[:,0,:,:,:])
 
-        log_grid_image('Depth/canonical_depth_raw', canon_depth_raw)
-        log_grid_image('Depth/canonical_depth', canon_depth)
-        log_grid_image('Depth/recon_depth', recon_depth)
-        log_grid_image('Depth/canonical_diffuse_shading', canon_diffuse_shading)
-        log_grid_image('Depth/canonical_normal', canon_normal)
-        log_grid_image('Depth/recon_normal', recon_normal)
-        log_grid_image('Depth/recon_depth_rotate', recon_depth_rotate)
+        log_grid_image('Depth/canonical_depth_raw', canon_depth_raw[:b0])
+        log_grid_image('Depth/canonical_depth', canon_depth[:b0])
+        log_grid_image('Depth/recon_depth', recon_depth[:b0])
+        log_grid_image('Depth/canonical_diffuse_shading', canon_diffuse_shading[:b0])
+        log_grid_image('Depth/canonical_normal', canon_normal[:b0])
+        log_grid_image('Depth/recon_normal', recon_normal[:b0])
+        log_grid_image('Depth/recon_depth_rotate', recon_depth_rotate[:b0])
 
-        log_grid_image('Texture/im_tex', im_tex)
-        log_grid_image('Texture/recon_im_tex', recon_im_tex)
-        log_grid_image('Texture/canonical_im_tex', canon_im_tex)
-        log_grid_image('Texture/recon_canon_im_tex', recon_canon_im_tex)
-        log_grid_image('Texture/shaded_texture', shaded_texture)
-        log_grid_image('Texture/shaded_canon_texture', shaded_canon_texture)
-        log_grid_image('Texture/fused_im_tex', fused_im_tex)
+        log_grid_image('Texture/im_tex', im_tex[:b0])
+        log_grid_image('Texture/recon_im_tex', recon_im_tex[:b0])
+        log_grid_image('Texture/canonical_im_tex', canon_im_tex[:b0])
+        log_grid_image('Texture/recon_canon_im_tex', recon_canon_im_tex[:b0])
+        log_grid_image('Texture/shaded_texture', shaded_texture[:b0])
+        log_grid_image('Texture/shaded_canon_texture', shaded_canon_texture[:b0])
+        log_grid_image('Texture/fused_im_tex', fused_im_tex[:b0])
 
         # logger.add_histogram('Image/canonical_diffuse_shading_hist', canon_diffuse_shading, total_iter)
 
