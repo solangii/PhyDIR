@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
-from .models import EDDeconv, Encoder, UNet, ConvLayer, ConfNet
+from .models import EDDeconv, Encoder, UNet, ConvLayer, ConfNet, PerceptualLoss
 from . import utils
 from .renderer import Renderer
 from .models.stylegan2 import Discriminator, DiscriminatorLoss, GeneratorLoss
@@ -30,6 +30,9 @@ class PhyDIR():
         self.xy_translation_range = cfgs.get('xy_translation_range', 0.1)
         self.z_translation_range = cfgs.get('z_translation_range', 0.1)
         self.use_conf_map = cfgs.get('use_conf_map', True)
+        self.lam_flip = cfgs.get('lam_f', 0.5)
+        self.lam_flip_start_epoch = cfgs.get('lam_flip_start_epoch', 0)
+        self.lam_perc = cfgs.get('lam_perc', 1)
         self.lam_adv = cfgs.get('lam_adv', 0.5)
         self.lam_shape = cfgs.get('lam_shape', 0.3)
         self.lam_tex = cfgs.get('lam_tex', 0.3)
@@ -54,6 +57,7 @@ class PhyDIR():
 
         self.discriminator_loss = DiscriminatorLoss()
         self.generator_loss = GeneratorLoss()
+        self.perceptual_loss = PerceptualLoss(requires_grad=False)
 
         self.network_names = [k for k in vars(self) if 'net' in k]
         self.loss_names = [k for k in vars(self) if 'loss' in k]
@@ -130,7 +134,7 @@ class PhyDIR():
     def photometric_loss(self, im1, im2, mask=None, conf_sigma=None):
         loss = (im1-im2).abs()
         if conf_sigma is not None:
-            loss = loss *(2**0.5) / (conf_sigma +EPS) + (conf_sigma +EPS).log()
+            loss = loss *(2**0.5) / (conf_sigma +EPS) + (conf_sigma*(2**0.5) +EPS).log()
         if mask is not None:
             mask = mask.expand_as(loss)
             loss = (loss * mask).sum() / mask.sum()
@@ -355,12 +359,11 @@ class PhyDIR():
                 self.recon_im_rotate = self.recon_im_rotate * recon_im_mask_rotate
 
                 ## loss function
-                self.loss_recon = self.photometric_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k],
-                                                        conf_sigma=self.conf_sigma_l1)
-                self.loss_recon_flip = self.photometric_loss(self.recon_im[b*k:], self.input_im,
-                                                             mask=recon_im_mask[b*k:],
-                                                             conf_sigma=self.conf_sigma_l1_flip)
-
+                self.loss_recon = self.photometric_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_l1)
+                self.loss_recon_flip = self.photometric_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_l1_flip)
+                self.loss_perc_im = self.perceptual_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_percl)
+                self.loss_perc_im_flip = self.perceptual_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_percl_flip)
+                lam_flip = 1 if self.trainer.current_epoch < self.lam_flip_start_epoch else self.lam_flip
                 # self.loss_g = self.generator_loss(self.discriminator(self.recon_im))
                 # self.loss_adv = self.loss_g + self.loss_d
                 self.loss_tex = (self.netT(self.recon_im_rotate[:b*k].detach()) - self.netT(self.input_im)).abs().mean()
@@ -368,8 +371,8 @@ class PhyDIR():
                 self.loss_light = (self.netL(self.recon_im_rotate[:b*k].detach()) - self.netL(self.input_im)).abs().mean()
                 # self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + self.lam_adv * self.loss_g \
                 #                    + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
-                self.loss_total += self.loss_recon + self.loss_recon_flip + self.lam_shape * self.loss_shape \
-                                   + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
+                self.loss_total += self.loss_recon + lam_flip*self.loss_recon_flip + self.lam_perc*(self.loss_perc_im + lam_flip*self.loss_perc_im_flip) \
+                                   + self.lam_shape * self.loss_shape + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
 
         metrics = {'loss': self.loss_total}
 
