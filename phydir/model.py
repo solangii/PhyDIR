@@ -337,12 +337,13 @@ class PhyDIR():
                     self.conf_sigma_l1 = None
 
                 ## rotated image (not sure..)
-                random_view = torch.rand(1, 6).to(self.input_im.device)
-                random_view = torch.cat([
-                    random_view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
-                    random_view[:, 3:5] * self.xy_translation_range,
-                    random_view[:, 5:] * self.z_translation_range], 1)  # Bx6
-                self.renderer.set_transform_matrices(random_view)
+                random_R = torch.rand(3).to(self.input_im.device)
+                random_R = random_R * math.pi / 180 * self.xyz_rotation_range
+                self.view_rot = torch.cat([
+                    self.view[:, :3] + random_R,
+                    self.view[:, 3:5],
+                    self.view[:, 5:]], 1)  # b*kx6
+                self.renderer.set_transform_matrices(self.view_rot)
                 self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
                 grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
                 self.recon_im_tex_rotate = nn.functional.grid_sample(self.shaded_texture, grid_2d_from_canon_rotate,
@@ -567,14 +568,14 @@ class PhyDIR():
         # logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
 
         # logger.add_histogram('Depth/canon_depth_raw_hist', canon_depth_raw_hist, total_iter)
-        # vlist = ['view_rx', 'view_ry', 'view_rz', 'view_tx', 'view_ty', 'view_tz']
-        # for i in range(self.view.shape[1]):
-        #     logger.add_histogram('View/' + vlist[i], self.view[:, i], total_iter)
-        # logger.add_histogram('Light/canon_light_a', self.canon_light_a, total_iter)
-        # logger.add_histogram('Light/canon_light_b', self.canon_light_b, total_iter)
-        # llist = ['canon_light_dx', 'canon_light_dy', 'canon_light_dz']
-        # for i in range(self.canon_light_d.shape[1]):
-        #     logger.add_histogram('Light/' + llist[i], self.canon_light_d[:, i], total_iter)
+        vlist = ['view_rx', 'view_ry', 'view_rz', 'view_tx', 'view_ty', 'view_tz']
+        for i in range(self.view.shape[1]):
+            logger.add_histogram('View/' + vlist[i], self.view[:, i], total_iter)
+        logger.add_histogram('Light/canon_light_a', self.canon_light_a, total_iter)
+        logger.add_histogram('Light/canon_light_b', self.canon_light_b, total_iter)
+        llist = ['canon_light_dx', 'canon_light_dy', 'canon_light_dz']
+        for i in range(self.canon_light_d.shape[1]):
+            logger.add_histogram('Light/' + llist[i], self.canon_light_d[:, i], total_iter)
 
         def log_grid_image(label, im, nrow=int(math.ceil(b0 ** 0.5)), iter=total_iter):
             im_grid = torchvision.utils.make_grid(im, nrow=nrow)
@@ -625,3 +626,14 @@ class PhyDIR():
             log_grid_image('Depth_gt/normal_gt', normal_gt)
             log_grid_image('Depth_gt/sie_map_masked', sie_map_masked)
             log_grid_image('Depth_gt/norm_err_map_masked', norm_err_map_masked)
+
+        # for rendering at canoncial view
+        self.fused_canon_tex = torch.cat([self.shaded_texture, self.shaded_canon_texture], dim=1).squeeze(0)
+        self.fused_canon_tex = self.netF_conv(self.fused_canon_tex)
+
+        fused_canon_tex = texture_viz(self.fused_canon_tex.squeeze(0).clamp(-1,1).detach().cpu() /2+0.5)
+        log_grid_image('Debug/fused_canon_tex', fused_canon_tex[:b0])
+
+        recon_canon_im = self.netN(self.fused_canon_tex)
+        recon_canon_im = recon_canon_im.clamp(-1,1).detach().cpu() /2+0.5
+        log_grid_image('Debug/recon_canon_im', recon_canon_im[:b0])
