@@ -362,9 +362,8 @@ class PhyDIR():
                 ## loss function
                 self.loss_recon = self.photometric_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_l1)
                 self.loss_recon_flip = self.photometric_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_l1_flip)
-                self.loss_perc_im = self.perceptual_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_percl)
-                self.loss_perc_im_flip = self.perceptual_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_percl_flip)
-                lam_flip = 1 if self.trainer.current_epoch < self.lam_flip_start_epoch else self.lam_flip
+                # self.loss_perc_im = self.perceptual_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_percl)
+                # self.loss_perc_im_flip = self.perceptual_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_percl_flip)
                 # self.loss_g = self.generator_loss(self.discriminator(self.recon_im))
                 # self.loss_adv = self.loss_g + self.loss_d
                 self.loss_tex = (self.netT(self.recon_im_rotate[:b*k].detach()) - self.netT(self.input_im)).abs().mean()
@@ -372,8 +371,10 @@ class PhyDIR():
                 self.loss_light = (self.netL(self.recon_im_rotate[:b*k].detach()) - self.netL(self.input_im)).abs().mean()
                 # self.loss_total += self.loss_recon + self.lam_shape * self.loss_shape + self.lam_adv * self.loss_g \
                 #                    + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
-                self.loss_total += self.loss_recon + lam_flip*self.loss_recon_flip + self.lam_perc*(self.loss_perc_im + lam_flip*self.loss_perc_im_flip) \
-                                   + self.lam_shape * self.loss_shape + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
+                # self.loss_total += self.loss_recon + self.lam_flip*self.loss_recon_flip + self.lam_perc*(self.loss_perc_im + self.lam_flip*self.loss_perc_im_flip) \
+                #                    + self.lam_shape * self.loss_shape + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
+                self.loss_total += self.loss_recon + self.lam_flip * self.loss_recon_flip + \
+                                   self.lam_shape * self.loss_shape + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
 
         metrics = {'loss': self.loss_total}
 
@@ -549,6 +550,9 @@ class PhyDIR():
 
         if self.use_conf_map:
             conf_map_l1 = 1/(1+self.conf_sigma_l1.detach().cpu()+EPS)
+            conf_map_l1_flip = 1/(1+self.conf_sigma_l1_flip.detach().cpu()+EPS)
+            conf_map_percl = 1/(1+self.conf_sigma_percl.detach().cpu()+EPS)
+            conf_map_percl_flip = 1/(1+self.conf_sigma_percl_flip.detach().cpu()+EPS)
         # canon_light = torch.cat([self.canon_light_a, self.canon_light_b, self.canon_light_d], 1).detach().cpu()
         # view = self.view.detach().cpu()
         # canon_im_rotate_grid = [torchvision.utils.make_grid(img, nrow=int(math.ceil(b0**0.5))) for img in torch.unbind(canon_im_rotate, 1)]  # [(C,H,W)]*T
@@ -563,6 +567,8 @@ class PhyDIR():
         logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
         logger.add_scalar('Loss/loss_shape', self.loss_shape, total_iter)
         logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
+        # logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
+        # logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
         # logger.add_scalar('Loss/loss_adv', self.loss_adv, total_iter)
         # logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
         # logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
@@ -606,6 +612,10 @@ class PhyDIR():
 
         if self.use_conf_map:
             log_grid_image('Conf/conf_map_l1', conf_map_l1)
+            log_grid_image('Conf/conf_map_l1_flip', conf_map_l1_flip)
+            log_grid_image('Conf/conf_map_perc_im', conf_map_percl)
+            log_grid_image('Conf/conf_map_perc_im_flip', conf_map_percl_flip)
+
             logger.add_histogram('Conf/conf_sigma_l1_hist', self.conf_sigma_l1, total_iter)
 
         # logger.add_video('Image_rotate/recon_rotate', canon_im_rotate_grid, total_iter, fps=4)
