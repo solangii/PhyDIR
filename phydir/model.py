@@ -43,6 +43,7 @@ class PhyDIR():
         self.K = cfgs.get('K', None)
         self.tex_channels = cfgs.get('tex_channels', 32)
         self.load_gt_depth = cfgs.get('load_gt_depth', False)
+        self.depth_upsample = cfgs.get('depth_upsample', False)
         self.renderer = Renderer(cfgs)
 
         ## networks and optimizers
@@ -256,31 +257,41 @@ class PhyDIR():
             self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
             b, k, c, h, w = self.input_im.shape
             self.input_im = self.input_im.view(b * k, c, h, w)
-
+            self.input_im_resize=F.interpolate(self.input_im, (64, 64), mode='bilinear', align_corners=True)
             ## 3D Networks
-            # 1. predict depth
-            self.canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
-            self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
-            self.canon_depth = self.canon_depth.tanh()
-            self.canon_depth = self.depth_rescaler(self.canon_depth)
+            if self.depth_upsample:
+                # depth upsampling to 256x256
+                self.canon_depth_raw = self.netD(self.input_im_resize)  # Bx1xHxW
+                self.canon_depth_raw = F.interpolate(self.canon_depth_raw, size=(h, w), mode='bilinear', align_corners=True).squeeze(1)
+                self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b * k, -1).mean(1).view(b * k, 1, 1)
+                self.canon_depth = self.canon_depth.tanh()
+                self.canon_depth = self.depth_rescaler(self.canon_depth)
+
+
+            else:
+                # 1. predict depth
+                self.canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
+                self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
+                self.canon_depth = self.canon_depth.tanh()
+                self.canon_depth = self.depth_rescaler(self.canon_depth)
 
             ## clamp border depth
-            depth_border = torch.zeros(1, h, w - 4).to(self.input_im.device)
+            depth_border = torch.zeros(1, h, w - 4).to(self.input_im_resize.device)
             depth_border = nn.functional.pad(depth_border, (2, 2), mode='constant', value=1)
             self.canon_depth = self.canon_depth * (1 - depth_border) + depth_border * self.border_depth
             self.canon_depth = torch.cat([self.canon_depth, self.canon_depth.flip(2)], 0)  # flip
 
             # 2. predict light
-            canon_light = self.netL(self.input_im).repeat(2,1)   # b*k x4
+            canon_light = self.netL(self.input_im_resize).repeat(2,1)   # b*k x4
             self.canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, b*kx1
             self.canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, b*kx1
             canon_light_dxy = canon_light[:, 2:]
-            self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k*2, 1).to(self.input_im.device)], 1)
+            self.canon_light_d = torch.cat([canon_light_dxy, torch.ones(b*k*2, 1).to(self.input_im_resize.device)], 1)
             self.canon_light_d = self.canon_light_d / (
                 (self.canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
 
             # 3. predict viewpoint
-            self.view = self.netV(self.input_im).repeat(2,1)
+            self.view = self.netV(self.input_im_resize).repeat(2,1)
             self.view = torch.cat([
                 self.view[:, :3] * math.pi / 180 * self.xyz_rotation_range,
                 self.view[:, 3:5] * self.xy_translation_range,
