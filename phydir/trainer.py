@@ -186,3 +186,51 @@ class Trainer():
                     self.model.visualize(self.logger, total_iter=total_iter, max_bs=25)
             # torch.cuda.empty_cache()
         return metrics
+
+    def debug(self):
+        ## initialize
+        self.metrics_trace.reset()
+        self.train_iter_per_epoch = len(self.train_loader)
+        self.model.to_device(self.device)
+        self.model.init_optimizers(self.stage)
+
+        ## load ckpt
+        start_epoch = self.load_checkpoint(optim=True, metrics=True, epoch=True)
+
+        ## initialize tensorboardX logger
+        if self.use_logger:
+            from tensorboardX import SummaryWriter
+            from datetime import datetime, timezone, timedelta
+
+            kst = timezone(timedelta(hours=9))
+            self.logger = SummaryWriter(
+                os.path.join(self.result_dir, 'logs', datetime.now(kst).strftime("%Y%m%d-%H%M%S"))) #timezone
+            print(f"Saving logs to {self.logger.logdir}")
+            ## cache one batch for visualization
+            self.viz_input = self.val_loader.__iter__().__next__()
+
+        ## run epochs
+        print(f"{self.model.exp_name}: optimizing to {self.num_epochs} epochs")
+        for epoch in range(start_epoch, self.num_epochs):
+            self.current_epoch = epoch
+            metrics = self.run_epoch_debug(self.train_loader, epoch)
+
+        print("debug end")
+        print(metrics)
+
+
+    def run_epoch_debug(self, loader, epoch=0, is_validation=False, is_test=False):
+        is_train = not is_validation and not is_test
+        metrics = self.make_metrics()
+
+        if is_train:
+            print(f"Starting training epoch {epoch}")
+            self.model.set_train()
+        else:
+            print(f"Starting validation epoch {epoch}")
+            self.model.set_eval()
+
+        for iter, input in enumerate(loader):
+            m, v = self.model.calc_view_range(input)
+            print("iter: ", iter, "mean value of view: ", m, v)
+        return m, v

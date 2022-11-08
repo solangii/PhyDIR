@@ -9,6 +9,8 @@ from .models import EDDeconv, Encoder, UNet, ConvLayer, ConfNet, PerceptualLoss
 from . import utils
 from .renderer import Renderer
 from .models.stylegan2 import Discriminator, DiscriminatorLoss, GeneratorLoss
+# from .models.resnet import ResNet, BasicBlock
+from .meters import TotalAverage
 
 EPS = 1e-7
 
@@ -69,6 +71,11 @@ class PhyDIR():
         self.depth_rescaler = lambda d : (1+d)/2 *self.max_depth + (1-d)/2 *self.min_depth
         self.amb_light_rescaler = lambda x : (1+x)/2 *self.max_amb_light + (1-x)/2 *self.min_amb_light
         self.diff_light_rescaler = lambda x : (1+x)/2 *self.max_diff_light + (1-x)/2 *self.min_diff_light
+
+        self.debug = cfgs.get('debug', False)
+        if self.debug:
+            self.view_m = TotalAverage()
+            self.view_v = TotalAverage()
 
     def init_optimizers(self, stage=None):
         target_nets = {1: ['netC', 'netT', 'netN', 'netT_conv', 'netF_conv'],
@@ -337,12 +344,23 @@ class PhyDIR():
                     self.conf_sigma_l1 = None
 
                 ## rotated image (not sure..)
-                random_R = torch.rand(3).to(self.input_im.device)
-                random_R = random_R * math.pi / 180 * self.xyz_rotation_range
+                random_a = torch.normal(mean=1.39e-01, std=0.00317, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
+                random_b = torch.normal(mean=3.72e-03, std=0.0462, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
+                random_c = torch.normal(mean=4.781e-03, std=0.0149, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
+                random_d = torch.normal(mean=1.415e-03, std=0.0071, size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
+                random_e = torch.normal(mean=9.527e-02, std=0.0039, size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
+                random_f = torch.normal(mean=2.681e-41, std=0. , size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
+
                 self.view_rot = torch.cat([
-                    self.view[:, :3] + random_R,
-                    self.view[:, 3:5],
-                    self.view[:, 5:]], 1)  # b*kx6
+                    random_a, random_b, random_c, random_d, random_e, random_f], 1
+                ).repeat(2,1)
+
+                # random_R = torch.rand(3).to(self.input_im.device)
+                # random_R = random_R * math.pi / 180 * self.xyz_rotation_range
+                # self.view_rot = torch.cat([
+                #     self.view[:, :3] + random_R,
+                #     self.view[:, 3:5],
+                #     self.view[:, 5:]], 1)  # b*kx6
                 self.renderer.set_transform_matrices(self.view_rot)
                 self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
                 grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
@@ -647,3 +665,17 @@ class PhyDIR():
         recon_canon_im = self.netN(self.fused_canon_tex)
         recon_canon_im = recon_canon_im.clamp(-1,1).detach().cpu() /2+0.5
         log_grid_image('Debug/recon_canon_im', recon_canon_im[:b0])
+
+    def calc_view_range(self, batch):
+        # calculate the view range
+        input_im = torch.stack(batch, dim=0).to(self.device) * 2. - 1.  # b, k, 3, h, w
+        b, k, c, h, w = input_im.shape
+        input_im = input_im.view(b * k, c, h, w)
+
+        v = self.netV(input_im)
+        var, mean = torch.var_mean(v, dim=0)
+        var, mean = var.cpu().detach().numpy(), mean.cpu().detach().numpy()
+
+        self.view_m.update(value= mean,mass=b*k)
+        self.view_v.update(value= var,mass=b*k)
+        return self.view_m.get(), self.view_v.get()
