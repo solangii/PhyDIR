@@ -343,24 +343,23 @@ class PhyDIR():
                 else:
                     self.conf_sigma_l1 = None
 
-                ## rotated image (not sure..)
-                random_a = torch.normal(mean=1.39e-01, std=0.00317, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
-                random_b = torch.normal(mean=3.72e-03, std=0.0462, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
-                random_c = torch.normal(mean=4.781e-03, std=0.0149, size=(b*k, 1)).to(self.input_im.device) * math.pi / 180 * self.xyz_rotation_range
-                random_d = torch.normal(mean=1.415e-03, std=0.0071, size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
-                random_e = torch.normal(mean=9.527e-02, std=0.0039, size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
-                random_f = torch.normal(mean=2.681e-41, std=0. , size=(b*k, 1)).to(self.input_im.device) * self.xyz_rotation_range
+                ## rotated image
+                random_rx = torch.normal(mean=1.39e-01, std=0.00317, size=(b*k, 1)).to(self.input_im.device).repeat(2, 1) * math.pi / 180 * self.xyz_rotation_range
+                random_ry = torch.normal(mean=3.72e-03, std=0.0462, size=(b*k, 1)).to(self.input_im.device).repeat(2, 1) * math.pi / 180 * self.xyz_rotation_range
+                random_rz = torch.normal(mean=4.781e-03, std=0.0149, size=(b*k, 1)).to(self.input_im.device).repeat(2, 1) * math.pi / 180 * self.xyz_rotation_range
 
                 self.view_rot = torch.cat([
-                    random_a, random_b, random_c, random_d, random_e, random_f], 1
-                ).repeat(2,1)
+                    random_rx, random_ry, random_rz,
+                    self.view[:, 3:5],
+                    self.view[:, 5:]], 1)
 
                 # random_R = torch.rand(3).to(self.input_im.device)
                 # random_R = random_R * math.pi / 180 * self.xyz_rotation_range
                 # self.view_rot = torch.cat([
                 #     self.view[:, :3] + random_R,
                 #     self.view[:, 3:5],
-                #     self.view[:, 5:]], 1)  # b*kx6
+                #     self.view[:, 5:]], 1)
+
                 self.renderer.set_transform_matrices(self.view_rot)
                 self.recon_depth_rotate = self.renderer.warp_canon_depth(self.canon_depth)
                 grid_2d_from_canon_rotate = self.renderer.get_inv_warped_2d_grid(self.recon_depth_rotate)
