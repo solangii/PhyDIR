@@ -549,7 +549,7 @@ class PhyDIR():
             header = header + '\nStd: ' + ',\t'.join(['%.8f'%x for x in std])
             utils.save_scores(path, self.all_scores, header=header)
 
-    def visualize(self, logger, total_iter, max_bs=25):
+    def visualize(self, logger, total_iter, max_bs=25, stage=None):
         k, c, h, w = self.input_im.shape
         b0 = min(max_bs, k)
 
@@ -603,9 +603,9 @@ class PhyDIR():
         logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
         logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
         logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
-        logger.add_scalar('Loss/loss_adv', self.loss_adv, total_iter)
-        logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
-        logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
+        if stage is not 2:
+            logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
+            logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
 
         def log_grid_image(label, im, nrow=int(math.ceil(b0 ** 0.5)), iter=total_iter):
             im_grid = torchvision.utils.make_grid(im, nrow=nrow)
