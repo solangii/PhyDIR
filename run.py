@@ -14,9 +14,12 @@ cfgs = setup_runtime(args)
 trainer = Trainer(cfgs, PhyDIR)
 run_train = cfgs.get('run_train', False)
 run_test = cfgs.get('run_test', False)
+debug = cfgs.get('debug', False)
 
 ## run
-if run_train:
+if debug:
+    trainer.debug()
+elif run_train:
     trainer.train()
-if run_test:
+elif run_test:
     trainer.test()

@@ -164,25 +164,83 @@ class Trainer():
             self.model.set_eval()
 
         for iter, input in enumerate(loader):
-            # discriminator update
-            _ = self.model.forward(input, mode='discriminator')
-            if self.stage is not 2:
-                self.model.update_D() # update discriminator
+            if self.cfgs['loss_adv']:
+                # discriminator update
+                loss_d = self.model.forward(input, mode='discriminator')
+                if self.stage is not 2 and is_train:
+                    self.model.backward(mode='discriminator') # update discriminator
+
+                # generator update
+                loss_g = self.model.forward(input, mode='generator')
+                if self.stage is not 2 and is_train:
+                    self.model.backward(mode='discriminator') # update generator
+
             m = self.model.forward(input)
             if is_train:
                 self.model.backward()
             elif is_test:
                 if iter<10:
                     self.model.save_results(self.test_result_dir)
-            m['loss'] += self.model.loss_d * self.model.lam_adv
+                else:
+                    break
+
+            if self.cfgs['loss_adv']:
+                m['loss'] += (loss_d + loss_g) * self.model.lam_adv
             metrics.update(m, self.batch_size)
             print(f"{'T' if is_train else 'V'}{epoch:02}/{iter:05}/{metrics}")
 
             if self.use_logger and is_train:
                 total_iter = iter + epoch * self.train_iter_per_epoch
                 if total_iter % self.log_freq == 0:
-                    self.model.forward(self.viz_input, mode='discriminator') # todo
                     self.model.forward(self.viz_input)
-                    self.model.visualize(self.logger, total_iter=total_iter, max_bs=25)
-            # torch.cuda.empty_cache()
+                    self.model.visualize(self.logger, total_iter=total_iter, max_bs=25, stage=self.stage)
+            torch.cuda.empty_cache()
         return metrics
+
+    def debug(self):
+        ## initialize
+        self.metrics_trace.reset()
+        self.train_iter_per_epoch = len(self.train_loader)
+        self.model.to_device(self.device)
+        self.model.init_optimizers(self.stage)
+
+        ## load ckpt
+        start_epoch = self.load_checkpoint(optim=True, metrics=True, epoch=True)
+
+        ## initialize tensorboardX logger
+        if self.use_logger:
+            from tensorboardX import SummaryWriter
+            from datetime import datetime, timezone, timedelta
+
+            kst = timezone(timedelta(hours=9))
+            self.logger = SummaryWriter(
+                os.path.join(self.result_dir, 'logs', datetime.now(kst).strftime("%Y%m%d-%H%M%S"))) #timezone
+            print(f"Saving logs to {self.logger.logdir}")
+            ## cache one batch for visualization
+            self.viz_input = self.val_loader.__iter__().__next__()
+
+        ## run epochs
+        print(f"{self.model.exp_name}: optimizing to {self.num_epochs} epochs")
+        for epoch in range(start_epoch, self.num_epochs):
+            self.current_epoch = epoch
+            metrics = self.run_epoch_debug(self.train_loader, epoch)
+
+        print("debug end")
+        print(metrics)
+
+    def run_epoch_debug(self, loader, epoch=0, is_validation=False, is_test=False):
+        is_train = not is_validation and not is_test
+        metrics = self.make_metrics()
+
+        if is_train:
+            print(f"Starting training epoch {epoch}")
+            self.model.set_train()
+        else:
+            print(f"Starting validation epoch {epoch}")
+            self.model.set_eval()
+
+        for iter, input in enumerate(loader):
+            m, v = self.model.calc_view_range(input)
+            print("iter: ", iter, "mean value of view: ", m)
+            print("iter: ", iter, "variance of view: ", v)
+        return m, v
