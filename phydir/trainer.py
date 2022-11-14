@@ -173,7 +173,7 @@ class Trainer():
                 # generator update
                 loss_g = self.model.forward(input, mode='generator')
                 if self.stage is not 2 and is_train:
-                    self.model.backward(mode='discriminator') # update generator
+                    self.model.backward(mode='generator') # update generator
 
             m = self.model.forward(input)
             if is_train:
