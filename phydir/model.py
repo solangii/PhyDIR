@@ -43,6 +43,7 @@ class PhyDIR():
         self.K = cfgs.get('K', None)
         self.tex_channels = cfgs.get('tex_channels', 32)
         self.load_gt_depth = cfgs.get('load_gt_depth', False)
+        self.use_adv = cfgs.get('loss_adv', False)
         self.depth_upsample = cfgs.get('depth_upsample', False) # True: depth 64 ->256 upsample
         self.view_constraint = cfgs.get('view_constraint', False) # True: use train statistic, False: random sampling
         self.renderer = Renderer(cfgs)
@@ -108,7 +109,7 @@ class PhyDIR():
     def load_model_state(self, cp):
         for k in cp:
             if k and k in self.network_names:
-                getattr(self, k).load_state_dict(cp[k])
+                getattr(self, k).load_state_dict(cp[k], strict=False)
 
     def load_optimizer_state(self, cp):
         for k in cp:
@@ -603,7 +604,7 @@ class PhyDIR():
         logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
         logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
         logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
-        if stage is not 2:
+        if stage is not 2 and self.use_adv:
             logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
             logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
 
