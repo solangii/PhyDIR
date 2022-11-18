@@ -184,6 +184,7 @@ class PhyDIR():
         self.loss_total = 0
         if self.load_gt_depth: # todo
             input, depth_gt = batch
+
         if self.K is None:
             for input in batch:
                 # data: K, 3, 256, 256 (K is random number with 1~6)
@@ -264,7 +265,6 @@ class PhyDIR():
 
                 ## loss function
                 loss_recon = self.photometric_loss(self.recon_im, self.input_im, self.conf_sigma_l1)
-                # self.loss_adv =
                 loss_tex = (self.netT(self.recon_im_rotate) - self.netT(self.input_im)).abs().mean()
                 loss_shape = (self.netD(self.recon_im_rotate) - self.netD(self.input_im)).abs().mean()
                 loss_light = (self.netL(self.recon_im_rotate) - self.netL(self.input_im)).abs().mean()
@@ -281,14 +281,12 @@ class PhyDIR():
                 # depth upsampling to 256x256
                 self.canon_depth_raw = self.netD(self.input_im_resize)  # Bx1xHxW
                 self.canon_depth_raw = F.interpolate(self.canon_depth_raw, size=(h, w), mode='bilinear', align_corners=True).squeeze(1)
-                self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b * k, -1).mean(1).view(b * k, 1, 1)
-                self.canon_depth = self.canon_depth.tanh()
-                self.canon_depth = self.depth_rescaler(self.canon_depth)
             else:
                 self.canon_depth_raw = self.netD(self.input_im).squeeze(1) # b*k, 1, h, w
-                self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b*k, -1).mean(1).view(b*k, 1, 1)
-                self.canon_depth = self.canon_depth.tanh()
-                self.canon_depth = self.depth_rescaler(self.canon_depth)
+
+            self.canon_depth = self.canon_depth_raw - self.canon_depth_raw.view(b * k, -1).mean(1).view(b * k, 1, 1)
+            self.canon_depth = self.canon_depth.tanh()
+            self.canon_depth = self.depth_rescaler(self.canon_depth)
 
             ## clamp border depth
             depth_border = torch.zeros(1, h, w - 4).to(self.input_im_resize.device)
@@ -368,6 +366,9 @@ class PhyDIR():
                     self.conf_sigma_percl_flip = conf_sigma_percl[:, 1:]
                 else:
                     self.conf_sigma_l1 = None
+                    self.conf_sigma_l1_flip = None
+                    self.conf_sigma_percl = None
+                    self.conf_sigma_percl_flip = None
 
                 ## rotated image
                 if self.view_constraint:
@@ -409,9 +410,10 @@ class PhyDIR():
                 self.loss_perc_im = self.perceptual_loss(self.recon_im[:b*k], self.input_im, mask=recon_im_mask[:b*k], conf_sigma=self.conf_sigma_percl)
                 self.loss_perc_im_flip = self.perceptual_loss(self.recon_im[b*k:], self.input_im, mask=recon_im_mask[b*k:], conf_sigma=self.conf_sigma_percl_flip)
                 self.loss_tex = (self.netT(self.recon_im_rotate[:b*k].detach()) - self.netT(self.input_im)).abs().mean()
-                self.loss_shape = (self.netD(self.recon_im_rotate[:b*k].detach()) - self.netD(self.input_im)).abs().mean()
-                self.loss_light = (self.netL(self.recon_im_rotate[:b*k].detach()) - self.netL(self.input_im)).abs().mean()
-
+                self.loss_shape = (self.clamp_boarder_depth(self.netD(self.recon_im_rotate[:b*k].detach()), b*k) \
+                                   - self.clamp_boarder_depth(self.netD(self.input_im), b*k)).abs().mean()
+                self.loss_light = (self.light_normalize(self.netL(self.recon_im_rotate[:b*k].detach()), b*k) \
+                                   - self.light_normalize(self.netL(self.input_im),b*k)).abs().mean()
                 self.loss_total += self.loss_recon + self.lam_flip*self.loss_recon_flip + self.lam_perc*(self.loss_perc_im + self.lam_flip*self.loss_perc_im_flip) \
                                    + self.lam_shape * self.loss_shape + self.lam_tex * self.loss_tex + self.lam_light * self.loss_light
                 # self.loss_total += self.loss_recon + self.lam_flip * self.loss_recon_flip + \
@@ -599,11 +601,15 @@ class PhyDIR():
         logger.add_scalar('Loss/loss_total', self.loss_total, total_iter)
         logger.add_scalar('Loss/loss_recon', self.loss_recon, total_iter)
         logger.add_scalar('Loss/loss_recon_flip', self.loss_recon_flip, total_iter)
-        logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
-        logger.add_scalar('Loss/loss_shape', self.loss_shape, total_iter)
-        logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
-        logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
-        logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
+        if self.lam_tex > 0:
+            logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
+        if self.lam_shape > 0:
+            logger.add_scalar('Loss/loss_shape', self.loss_shape, total_iter)
+        if self.lam_light > 0:
+            logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
+        if self.lam_perc > 0:
+            logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
+            logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
         if stage is not 2 and self.use_adv:
             logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
             logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
@@ -681,3 +687,27 @@ class PhyDIR():
         self.view_m.update(value= mean,mass=b*k)
         self.view_v.update(value= var,mass=b*k)
         return self.view_m.get(), self.view_v.get()
+
+    def clamp_boarder_depth(self, depth_raw, n):
+        canon_depth = depth_raw - depth_raw.view(n, -1).mean(1).view(n, 1, 1)
+        canon_depth = self.depth_rescaler(canon_depth.tanh())
+
+        depth_border = torch.zeros(1, self.image_size, self.image_size - 4).to(self.input_im_resize.device)
+        depth_border = nn.functional.pad(depth_border, (2, 2), mode='constant', value=1)
+        canon_depth = canon_depth * (1 - depth_border) + depth_border * self.border_depth
+
+        return canon_depth
+
+    def light_normalize(self, canon_light, n):
+        canon_light_a = self.amb_light_rescaler(canon_light[:, :1])  # ambience term, b*kx1
+        canon_light_b = self.diff_light_rescaler(canon_light[:, 1:2])  # diffuse term, b*kx1
+        canon_light_dxy = canon_light[:, 2:]
+        canon_light_d = torch.cat([canon_light_dxy, torch.ones(n, 1).to(self.input_im_resize.device)], 1)
+        canon_light_d = canon_light_d / (
+            (canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
+        return torch.cat([canon_light_a, canon_light_b, canon_light_d], 1)
+
+
+
+
+

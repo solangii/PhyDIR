@@ -13,7 +13,7 @@ class Trainer():
         self.batch_size = cfgs.get('batch_size', 8)
         self.save_checkpoint_freq = cfgs.get('save_checkpoint_freq', 1)
         self.keep_num_checkpoint = cfgs.get('keep_num_checkpoint', 2)  # -1 for keeping all checkpoints
-        self.resume = cfgs.get('resume', True)
+        self.resume = cfgs.get('resume', False)
         self.use_logger = cfgs.get('use_logger', True)
         self.log_freq = cfgs.get('log_freq', 1000)
         self.archive_code = cfgs.get('archive_code', True)
@@ -59,6 +59,7 @@ class Trainer():
         return epoch
 
     def get_checkpoint_name(self, pretrain_dir=None, checkpoint_dir=None, resume=False):
+        self.stage_change = False
         if pretrain_dir is not None:
             checkpoint_path = utils.get_ckpt(pretrain_dir, ext='pth')
         elif checkpoint_dir is not None:
@@ -68,6 +69,7 @@ class Trainer():
             if checkpoint_path is None and self.stage > 1:
                 self.checkpoint_dir = self.result_dir.split('stage')[0] + f'stage{self.stage - 1}'
                 checkpoint_path = utils.get_latest_checkpoint(self.checkpoint_dir, ext='pth')
+                self.stage_change = True
         else:
             checkpoint_path = None
         return checkpoint_path
@@ -120,7 +122,8 @@ class Trainer():
         self.model.init_optimizers(self.stage)
 
         ## load ckpt
-        start_epoch = self.load_checkpoint(optim=True, metrics=True, epoch=True)
+        start_epoch = self.load_checkpoint(optim=True, metrics=True, epoch=self.resume)
+        start_epoch = 0 if self.stage_change else start_epoch
 
         ## initialize tensorboardX logger
         if self.use_logger:
