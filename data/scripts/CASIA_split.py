@@ -29,11 +29,14 @@ for phase in nums.keys():
         # file list
         file_list = os.listdir(os.path.join(path, dir_name))
 
+        # add id directory to file list
+        file_list = [os.path.join(dir_name, file_name) for file_name in file_list]
+
         # add datalist
         datalist[phase][dir_name] = file_list
-        os.system(f'cp -r {path}/{dir_name} {target_path}/{phase}/{dir_name}')
+        # os.system(f'cp -r {path}/{dir_name} {target_path}/{phase}/{dir_name}')
 
 # save datallist to json file
 for phase in datalist.keys():
-    with open(f'/home/nsml/phydir/data/casia_webface/{phase}/datalist/combine.json', 'w') as f:
+    with open(f'/home/nsml/phydir/data/casia_webface/{phase}/datalist/combined.json', 'w') as f:
         json.dump(datalist[phase], f)
