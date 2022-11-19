@@ -508,12 +508,15 @@ class PhyDIR():
                 # canon_im_rotate = self.renderer.render_yaw(self.canon_im, self.canon_depth, v_before=v0,
                 #                                            maxr=90, nsample=15)  # (B,T,C,H,W)
                 # canon_im_rotate = canon_im_rotate.clamp(-1, 1).detach().cpu() / 2 + 0.5
-                canon_normal_rotate = self.renderer.render_yaw(self.canon_normal.permute(0,3,1,2), self.canon_depth, v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
+                canon_normal_rotate = self.renderer.render_yaw(self.canon_normal[:n].permute(0,3,1,2), self.canon_depth[:n], v_before=v0, maxr=90, nsample=15)  # (B,T,C,H,W)
                 canon_normal_rotate = canon_normal_rotate.clamp(-1,1).detach().cpu() /2+0.5
 
             input_im = self.input_im.detach().cpu().numpy() /2+0.5
             recon_im = self.recon_im.clamp(-1,1).detach().cpu().numpy() /2+0.5
+            recon_im_rotate = self.recon_im_rotate.clamp(-1, 1).detach().cpu() / 2 + 0.5
+
             canon_depth = ((self.canon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
+            canon_depth_raw = self.canon_depth_raw.detach().unsqueeze(1).cpu().numpy() / 2. + 0.5
             recon_depth = ((self.recon_depth -self.min_depth)/(self.max_depth-self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(1).numpy()
             canon_diffuse_shading = self.canon_diffuse_shading.detach().cpu().numpy()
             canon_normal = self.canon_normal.permute(0,3,1,2).detach().cpu().numpy() /2+0.5

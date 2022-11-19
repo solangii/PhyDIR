@@ -23,6 +23,7 @@ class Trainer():
         self.test_result_dir = cfgs.get('test_result_dir', None)
         self.stage = cfgs.get('stage', None) # 1. unet, 2. 3d, 3. joint
         self.pretrain_dir = cfgs.get('pretrain_dir', None) # for stage 2 and 3 (prev stage dir)
+        self.test_name = cfgs.get('test_name', None) # for testing
         self.cfgs = cfgs
 
         self.metrics_trace = meters.MetricsTrace()
@@ -43,6 +44,11 @@ class Trainer():
         checkpoint_name = self.get_checkpoint_name(self.pretrain_dir, self.checkpoint_dir, self.resume)
         if checkpoint_name is None:
             return 0 # from scratch
+
+        if self.test_name is None:
+            self.checkpoint_name = checkpoint_name.split('/')[-1].split('.')[0]
+        else:
+            self.checkpoint_name = self.test_name
         print(f"Loading checkpoint from {checkpoint_name}")
 
         cp = torch.load(checkpoint_name, map_location=self.device)
