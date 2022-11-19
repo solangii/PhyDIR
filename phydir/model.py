@@ -271,8 +271,14 @@ class PhyDIR():
                 self.loss_total += loss_recon + self.lam_shape * loss_shape +\
                               self.lam_tex * loss_tex + self.lam_light * loss_light
         else:
-            self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
-            b, k, c, h, w = self.input_im.shape
+            if self.load_gt_depth:
+                self.input_im = input.to(self.device) *2.-1.
+                b, c, h, w = self.input_im.shape
+                k = self.K # 1
+            else:
+                self.input_im = torch.stack(batch, dim=0).to(self.device) *2.-1.  # b, k, 3, h, w
+                b, k, c, h, w = self.input_im.shape
+
             self.input_im = self.input_im.view(b * k, c, h, w)
             self.input_im_resize = F.interpolate(self.input_im, (64, 64), mode='bilinear', align_corners=True)
 
@@ -431,14 +437,14 @@ class PhyDIR():
             # mask out background
             mask_gt = (self.depth_gt<self.depth_gt.max()).float()
             mask_gt = (nn.functional.avg_pool2d(mask_gt.unsqueeze(1), 3, stride=1, padding=1).squeeze(1) > 0.99).float()  # erode by 1 pixel
-            mask_pred = (nn.functional.avg_pool2d(recon_im_mask[:b].unsqueeze(1), 3, stride=1, padding=1).squeeze(1) > 0.99).float()  # erode by 1 pixel
+            mask_pred = (nn.functional.avg_pool2d(recon_im_mask[:b*k], 3, stride=1, padding=1).squeeze(1) > 0.99).float()  # erode by 1 pixel
             mask = mask_gt * mask_pred
-            self.acc_mae_masked = ((self.recon_depth[:b] - self.depth_gt[:b]).abs() *mask).view(b,-1).sum(1) / mask.view(b,-1).sum(1)
-            self.acc_mse_masked = (((self.recon_depth[:b] - self.depth_gt[:b])**2) *mask).view(b,-1).sum(1) / mask.view(b,-1).sum(1)
-            self.sie_map_masked = utils.compute_sc_inv_err(self.recon_depth[:b].log(), self.depth_gt[:b].log(), mask=mask)
-            self.acc_sie_masked = (self.sie_map_masked.view(b,-1).sum(1) / mask.view(b,-1).sum(1))**0.5
-            self.norm_err_map_masked = utils.compute_angular_distance(self.recon_normal[:b], self.normal_gt[:b], mask=mask)
-            self.acc_normal_masked = self.norm_err_map_masked.view(b,-1).sum(1) / mask.view(b,-1).sum(1)
+            self.acc_mae_masked = ((self.recon_depth[:b*k] - self.depth_gt[:b*k]).abs() *mask).view(b*k,-1).sum(1) / mask.view(b*k,-1).sum(1)
+            self.acc_mse_masked = (((self.recon_depth[:b*k] - self.depth_gt[:b*k])**2) *mask).view(b*k,-1).sum(1) / mask.view(b*k,-1).sum(1)
+            self.sie_map_masked = utils.compute_sc_inv_err(self.recon_depth[:b*k].log(), self.depth_gt[:b*k].log(), mask=mask)
+            self.acc_sie_masked = (self.sie_map_masked.view(b*k,-1).sum(1) / mask.view(b*k,-1).sum(1))**0.5
+            self.norm_err_map_masked = utils.compute_angular_distance(self.recon_normal[:b*k], self.normal_gt[:b*k], mask=mask)
+            self.acc_normal_masked = self.norm_err_map_masked.view(b*k,-1).sum(1) / mask.view(b*k,-1).sum(1)
 
             metrics['SIE_masked'] = self.acc_sie_masked.mean()
             metrics['NorErr_masked'] = self.acc_normal_masked.mean()
