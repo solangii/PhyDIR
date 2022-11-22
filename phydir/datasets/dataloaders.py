@@ -1,8 +1,11 @@
 import os
 import torch.utils.data
 from torch.utils.data import ConcatDataset
-from .common import ImageDataset
+from .common import ImageDataset, PairedDataset
 from .collate_fn import make_batch
+import torchvision.transforms as tfs
+from PIL import Image
+import numpy as np
 
 
 def get_data_loaders(cfgs):
@@ -18,9 +21,17 @@ def get_data_loaders(cfgs):
     training_data = cfgs.get('training_data', ['celeba'])
     data_root = cfgs.get('data_root', None)
 
+    load_gt_depth = cfgs.get('load_gt_depth', False)
+    AB_dnames = cfgs.get('paired_data_dir_names', ['image', 'depth'])
+    AB_fnames = cfgs.get('paired_data_filename_diff', None)
+
     train_loader = val_loader = test_loader = None
-    get_loader = lambda **kargs: get_image_loader(**kargs, training_data=training_data, batch_size=batch_size,
-                                                  num_workers=num_workers, image_size=image_size, crop=crop, K=K)
+    if load_gt_depth:
+        get_loader = lambda **kargs: get_paired_image_loader(**kargs, used_data=training_data, batch_size=batch_size, image_size=image_size,
+                                                             crop=crop, AB_dnames=AB_dnames, AB_fnames=AB_fnames)
+    else:
+        get_loader = lambda **kargs: get_image_loader(**kargs, training_data=training_data, batch_size=batch_size,
+                                                      num_workers=num_workers, image_size=image_size, crop=crop, K=K)
 
     if run_train:
         train_loader = get_loader(data_dir=data_root, partition='train')
@@ -61,6 +72,27 @@ def get_image_loader(data_dir, training_data, partition='train', batch_size=8, n
         collate_fn=make_batch
     )
     return loader
+
+IMG_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', '.tif', '.tiff', 'webp')
+def is_image_file(filename):
+    return filename.lower().endswith(IMG_EXTENSIONS)
+
+## paired AB image dataset ##
+
+def get_paired_image_loader(data_dir, used_data, partition='test', is_validation=False,
+    batch_size=256, num_workers=4, image_size=256, crop=None, AB_dnames=None, AB_fnames=None):
+
+    dataset = PairedDataset(data_dir, used_data=used_data, partition=partition, image_size=image_size, crop=crop, \
+        is_validation=is_validation, AB_dnames=AB_dnames, AB_fnames=AB_fnames)
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=not is_validation,
+        num_workers=num_workers,
+        pin_memory=True
+    )
+    return loader
+
 
 if __name__ == '__main__':
     import argparse

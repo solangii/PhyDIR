@@ -6,7 +6,7 @@ from . import meters
 from . import utils
 from .datasets.dataloaders import get_data_loaders
 
-class Trainer():
+class Trainer:
     def __init__(self, cfgs, model):
         self.device = cfgs.get('device', 'cpu')
         self.num_epochs = cfgs.get('num_epochs', 60)
@@ -23,6 +23,7 @@ class Trainer():
         self.test_result_dir = cfgs.get('test_result_dir', None)
         self.stage = cfgs.get('stage', None) # 1. unet, 2. 3d, 3. joint
         self.pretrain_dir = cfgs.get('pretrain_dir', None) # for stage 2 and 3 (prev stage dir)
+        self.test_name = cfgs.get('test_name', None) # for testing
         self.cfgs = cfgs
 
         self.metrics_trace = meters.MetricsTrace()
@@ -43,6 +44,11 @@ class Trainer():
         checkpoint_name = self.get_checkpoint_name(self.pretrain_dir, self.checkpoint_dir, self.resume)
         if checkpoint_name is None:
             return 0 # from scratch
+
+        if self.test_name is None:
+            self.checkpoint_name = checkpoint_name.split('/')[-1].split('.')[0]
+        else:
+            self.checkpoint_name = self.test_name
         print(f"Loading checkpoint from {checkpoint_name}")
 
         cp = torch.load(checkpoint_name, map_location=self.device)
@@ -105,8 +111,8 @@ class Trainer():
         with torch.no_grad():
             m = self.run_epoch(self.test_loader, epoch=self.current_epoch, is_test=True)
 
-        # score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
-        # self.model.save_scores(score_path)
+        score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
+        self.model.save_scores(score_path)
 
     def train(self):
         """Perform training."""
@@ -182,7 +188,7 @@ class Trainer():
             if is_train:
                 self.model.backward()
             elif is_test:
-                if iter<10:
+                if iter<3:
                     self.model.save_results(self.test_result_dir)
                 else:
                     break
