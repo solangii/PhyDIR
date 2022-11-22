@@ -548,6 +548,22 @@ class PhyDIR():
             # utils.save_videos(save_dir, canon_im_rotate_grid, suffix='image_video', sep_folder=sep_folder, cycle=True)
             utils.save_videos(save_dir, canon_normal_rotate_grid, suffix='normal_video', sep_folder=sep_folder, cycle=True)
 
+            if self.load_gt_depth:
+                depth_gt = ((self.depth_gt[:n] - self.min_depth) / (self.max_depth - self.min_depth)).clamp(0,1).detach().cpu().unsqueeze(
+                    1).numpy()
+                normal_gt = self.normal_gt[:n].permute(0, 3, 1, 2).detach().cpu().numpy() / 2 + 0.5
+                utils.save_images(save_dir, depth_gt, suffix='depth_gt', sep_folder=sep_folder)
+                utils.save_images(save_dir, normal_gt, suffix='normal_gt', sep_folder=sep_folder)
+
+                all_scores = torch.stack([
+                    self.acc_mae_masked.detach().cpu(),
+                    self.acc_mse_masked.detach().cpu(),
+                    self.acc_sie_masked.detach().cpu(),
+                    self.acc_normal_masked.detach().cpu()], 1)
+                if not hasattr(self, 'all_scores'):
+                    self.all_scores = torch.FloatTensor()
+                self.all_scores = torch.cat([self.all_scores, all_scores], 0)
+
     def save_scores(self, path):
         # save scores if gt is loaded
         if self.load_gt_depth:
@@ -715,8 +731,3 @@ class PhyDIR():
         canon_light_d = canon_light_d / (
             (canon_light_d ** 2).sum(1, keepdim=True)) ** 0.5  # diffuse light direction, b*kx3
         return torch.cat([canon_light_a, canon_light_b, canon_light_d], 1)
-
-
-
-
-

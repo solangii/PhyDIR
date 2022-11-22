@@ -6,7 +6,7 @@ from . import meters
 from . import utils
 from .datasets.dataloaders import get_data_loaders
 
-class Trainer():
+class Trainer:
     def __init__(self, cfgs, model):
         self.device = cfgs.get('device', 'cpu')
         self.num_epochs = cfgs.get('num_epochs', 60)
@@ -111,8 +111,8 @@ class Trainer():
         with torch.no_grad():
             m = self.run_epoch(self.test_loader, epoch=self.current_epoch, is_test=True)
 
-        # score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
-        # self.model.save_scores(score_path)
+        score_path = os.path.join(self.test_result_dir, 'eval_scores.txt')
+        self.model.save_scores(score_path)
 
     def train(self):
         """Perform training."""
@@ -188,7 +188,7 @@ class Trainer():
             if is_train:
                 self.model.backward()
             elif is_test:
-                if iter<10:
+                if iter<3:
                     self.model.save_results(self.test_result_dir)
                 else:
                     break
