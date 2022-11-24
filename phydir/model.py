@@ -81,12 +81,17 @@ class PhyDIR():
             self.view_v = TotalAverage()
 
     def init_optimizers(self, stage=None):
-        target_nets = {1: ['netC', 'netT', 'netT_conv', 'netF_conv'],
-                       2: ['netC', 'netD', 'netL', 'netV'],
-                       3: ['netC', 'netD', 'netL', 'netV', 'netT', 'netT_conv', 'netF_conv']}
+        target_nets = {1: ['netT', 'netT_conv', 'netF_conv'],
+                       2: ['netD', 'netL', 'netV'],
+                       3: ['netD', 'netL', 'netV', 'netT', 'netT_conv', 'netF_conv']}
         freeze_nets = {1: ['netD', 'netL', 'netV'],
                        2: ['netT', 'netN', 'netT_conv', 'netF_conv', 'discriminator'],
                        3: []}
+        if self.use_conf_map:
+            target_nets[1].append('netC')
+            target_nets[2].append('netC')
+            target_nets[3].append('netC')
+
         self.set_requires_grad(freeze_nets[stage], requires_grad=False)
         self.set_requires_grad(target_nets[stage], requires_grad=True)
 
@@ -625,7 +630,8 @@ class PhyDIR():
         ## write summary
         logger.add_scalar('Loss/loss_total', self.loss_total, total_iter)
         logger.add_scalar('Loss/loss_recon', self.loss_recon, total_iter)
-        logger.add_scalar('Loss/loss_recon_flip', self.loss_recon_flip, total_iter)
+        if self.lam_flip > 0:
+            logger.add_scalar('Loss/loss_recon_flip', self.loss_recon_flip, total_iter)
         if self.lam_tex > 0:
             logger.add_scalar('Loss/loss_tex', self.loss_tex, total_iter)
         if self.lam_shape > 0:
@@ -634,7 +640,8 @@ class PhyDIR():
             logger.add_scalar('Loss/loss_light', self.loss_light, total_iter)
         if self.lam_perc > 0:
             logger.add_scalar('Loss/loss_perc_im', self.loss_perc_im, total_iter)
-            logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
+            if self.lam_flip > 0:
+                logger.add_scalar('Loss/loss_perc_im_flip', self.loss_perc_im_flip, total_iter)
         if stage is not 2 and self.use_adv:
             logger.add_scalar('Loss/loss_g', self.loss_g, total_iter)
             logger.add_scalar('Loss/loss_d', self.loss_d, total_iter)
