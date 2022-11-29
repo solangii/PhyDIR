@@ -10,11 +10,7 @@ gpu: V100-1
     - set up your environment following the [official guide](https://github.com/elliottwu/unsup3d)
     - OR use `nvcr.io.nvidia.cuda:phydir_v1` image (If you request, I will deliver the image.)
     - OR use `env.yaml`
-2. Dataset setup (use symbolic link)
-```
-mkdir data
-ln -s /mnt/video-nfs5/users/solang/src/phydir/data/ data/
-```
+2. Dataset setup 
 3. Training
     - change `phydir path`, `conda path` and `config name`
 ```
