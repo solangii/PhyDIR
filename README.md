@@ -9,6 +9,7 @@ gpu: V100-1
 1. Environment setup
     - set up your environment following the [official guide](https://github.com/elliottwu/unsup3d)
     - OR use `nvcr.io.nvidia.cuda:phydir_v1` image (If you request, I will deliver the image.)
+    - OR use `env.yaml`
 2. Dataset setup (use symbolic link)
 ```
 mkdir data
