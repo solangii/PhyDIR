@@ -8,11 +8,12 @@ gpu: V100-1
 ```
 1. Environment setup
     - set up your environment following the [official guide](https://github.com/elliottwu/unsup3d)
-    - OR use `nvcr.io.nvidia.cuda:phydir_v1` image (If you request, I will deliver the image.)
     - OR use `env.yaml`
 2. Dataset setup 
 3. Training
     - change `phydir path`, `conda path` and `config name`
+    
+Example: 
 ```
 cd [phydir] && \
 source /home/nsml/anaconda3/etc/profile.d/conda.sh && \
@@ -20,7 +21,7 @@ conda activate unsup3d && \
 python run.py --config configs/[cfg_name].yml --gpu 0 --num_workers 4
 ```
 
-## 📁 file structure
+## 📁 File Structure
 ```
 --------------------
 ├── data
