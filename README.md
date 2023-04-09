@@ -7,7 +7,7 @@ env: nsml v2
 gpu: V100-1
 ```
 1. Environment setup
-    - set up your environment following the [official guide](https://github.com/elliottwu/unsup3d)
+    - set up your environment following the [Unsup3D's guide](https://github.com/elliottwu/unsup3d)
     - OR use `env.yaml`
 2. Dataset setup 
 3. Training
